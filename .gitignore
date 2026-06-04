@@ -1,0 +1,54 @@
+# ---- secrets / environment (NEVER commit) ----
+.env
+.env.*
+!.env.example
+**/.env
+.perpsagent_memory.json
+*.perpsagent_memory.json
+*.key
+*.pem
+
+# ---- agent / dev context (not for the public repo) ----
+CLAUDE.md
+**/CLAUDE.md
+.claude/
+
+# ---- office temp / lock files ----
+~$*
+*.tmp
+
+# ---- python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# ---- foundry / solidity ----
+contracts/out/
+contracts/cache/
+contracts/lib/
+contracts/broadcast/
+contracts/dependencies/
+
+# ---- node ----
+node_modules/
+package-lock.json
+
+# ---- os / editor ----
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# local dev wallet — NEVER commit
+.secrets/
+*.db
+*.db-journal
+backend/perpsagent.db
+.trash/

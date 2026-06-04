@@ -1,0 +1,22 @@
+{
+  "network": "mantle-sepolia",
+  "chainId": 5003,
+  "rpc": "https://rpc.sepolia.mantle.xyz",
+  "deployer": "0x176065cD234bEab173a89B299B299492bB20C006",
+  "deployedAt": 1780571269,
+  "contracts": {
+    "StrategyLedger": {
+      "proxy": "0x128E925828952803E05157Ee4fEf54ac47cf1C88",
+      "implementation": "0xff5295499a6c1b7db32f151aef3615a24559d12a"
+    },
+    "StrategyMemory": {
+      "proxy": "0xC26E112437e5B6d739232732c665a64eb14Dc519",
+      "implementation": "0xfde11e6308814e91661635a73db0a7c80ae888ba"
+    },
+    "Vault": {
+      "proxy": "0x630370DC3a666c9b6816D5C9E8a3757242603eF3",
+      "implementation": "0x9647d216dae5a1edf79c6f1cc8e058b7cf801306"
+    }
+  },
+  "explorer": "https://sepolia.mantlescan.xyz"
+}

@@ -23,7 +23,7 @@ from .sense import classify_regime
 class LearningLoop:
     def __init__(self, exchange, chain, manager, policy: ContextualPolicy | None = None,
                  signals: list | None = None, venue: Venue = Venue.FAKE, store=None,
-                 breaker=None, recenter_interval: float = 0.0) -> None:
+                 breaker=None, recenter_interval: float = 0.0, profit_guard=None) -> None:
         self.exchange = exchange
         self.chain = chain
         self.manager = manager
@@ -32,6 +32,7 @@ class LearningLoop:
         self.venue = venue
         self.store = store
         self.breaker = breaker
+        self.profit_guard = profit_guard
         self.recenter_interval = recenter_interval  # >0 enables the live re-center supervisor
         self._regimes: dict[str, RegimeFingerprint] = {}
         self._seq = 0
@@ -50,7 +51,8 @@ class LearningLoop:
         self._rationales[instance_id] = explain_decision(regime, recalled, cfg)
         tx = await self.chain.commit_strategy(instance_id, cfg)  # pre-commit BEFORE trading
         await self.manager.create(self.exchange, cfg, self.store,  # execute the grid
-                                  breaker=self.breaker, monitor_interval=self.recenter_interval)
+                                  breaker=self.breaker, monitor_interval=self.recenter_interval,
+                                  profit_guard=self.profit_guard)
         if self.store is not None and hasattr(self.store, "save_instance"):
             await self.store.save_instance(cfg, regime_json=json.dumps(regime.__dict__))
         self._regimes[instance_id] = regime

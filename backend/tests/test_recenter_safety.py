@@ -4,7 +4,7 @@ from decimal import Decimal
 
 from perpsagent.adapters.exchanges.fake import FakeExchange
 from perpsagent.app.engine import GridEngine
-from perpsagent.app.safety import CircuitBreaker
+from perpsagent.app.safety import CircuitBreaker, ProfitGuard
 from perpsagent.domain.models import Fill, GridConfig, GridState, Side, Venue
 
 
@@ -80,3 +80,44 @@ async def test_breaker_drawdown_on_unrealized():
     await ex.move_price("BTCUSDT", Decimal("90"))
     await eng.maybe_recenter()
     assert breaker.tripped and eng.state is GridState.HALTED
+
+
+def test_profit_guard_take_profit():
+    g = ProfitGuard(take_profit=Decimal("100"))
+    assert g.check(Decimal("99")) is None
+    assert g.check(Decimal("100")) is not None and g.tripped
+
+
+def test_profit_guard_trailing_locks_after_pullback():
+    g = ProfitGuard(trail_frac=Decimal("0.3"), trail_arm=Decimal("50"))
+    assert g.check(Decimal("40")) is None      # below arm
+    assert g.check(Decimal("100")) is None     # peak 100, armed
+    assert g.check(Decimal("75")) is None      # gave back 25 (<30) — keep riding
+    assert g.check(Decimal("70")) is not None  # gave back 30 (>=30) — bank
+    assert g.tripped
+
+
+async def test_engine_banks_profit_on_trailing_stop():
+    ex = FakeExchange({"mid": "100", "tick": "0.1"})
+    pg = ProfitGuard(trail_frac=Decimal("0.3"), trail_arm=Decimal("1"))
+    eng = GridEngine(ex, _cfg(), profit_guard=pg)
+    await eng.start()
+    eng._inv.clear(); eng._inv.append((Decimal("100"), Decimal("1")))  # long 1 @ 100
+    await eng._check_guards(Decimal("110"))   # +10 unrealized -> peak 10, armed
+    assert eng.state is GridState.RUNNING
+    await eng._check_guards(Decimal("108"))   # gave back 2 (<3) -> hold
+    assert eng.state is GridState.RUNNING
+    await eng._check_guards(Decimal("106"))   # gave back 4 (>=3) -> bank
+    assert pg.tripped and eng.state is GridState.HALTED
+    assert "BTCUSDT" in ex.flatten_calls
+
+
+async def test_recenter_does_not_average_up_into_a_pump():
+    ex = FakeExchange({"mid": "100", "tick": "0.1"})
+    eng = GridEngine(ex, _cfg())
+    await eng.start()
+    eng._inv.clear(); eng._inv.append((Decimal("100"), Decimal("0.05")))  # long, avg 100
+    await ex.move_price("BTCUSDT", Decimal("110"))   # pump far above avg entry
+    await eng.maybe_recenter()
+    buys = [o for o in await ex.open_orders("BTCUSDT") if o.side is Side.BUY]
+    assert buys == []  # never buy above the average long entry

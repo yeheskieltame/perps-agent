@@ -3,9 +3,13 @@
 Thin async shell: enforces leverage, places the initial grid, then reacts to
 fills (place the paired order, accumulate realized PnL). A background `monitor`
 loop re-centers the grid to FOLLOW price when it leaves the band (so a trending
-market doesn't strand the grid as a one-sided bag) and enforces the circuit
-breaker. All math is pure (domain/grid.py). Drive logic from fills, never from
-order snapshots (mirrors deltaperps).
+market doesn't strand the grid as a one-sided bag) and enforces two guards:
+  - CircuitBreaker caps the downside (inventory / drawdown).
+  - ProfitGuard locks the upside (take-profit / trailing-stop) — rides a move,
+    then banks when it turns, instead of giving the unrealized gain back.
+Re-center is inventory-aware: it never averages UP (no new BUY above the average
+long entry), so a pump can't keep stacking the bag. All math is pure
+(domain/grid.py). Drive logic from fills, never from order snapshots.
 """
 from __future__ import annotations
 
@@ -17,16 +21,17 @@ from decimal import Decimal
 from ..domain.grid import build_grid_orders, compute_paired_order, levels_for, plan_levels, quantize
 from ..domain.models import EpisodeOutcome, Fill, GridConfig, GridState, Order, Side
 from ..domain.pnl import risk_adjusted
-from .safety import CircuitBreaker
+from .safety import CircuitBreaker, ProfitGuard
 
 
 class GridEngine:
-    def __init__(self, exchange, cfg: GridConfig, store=None,
-                 breaker: CircuitBreaker | None = None, monitor_interval: float = 0.0) -> None:
+    def __init__(self, exchange, cfg: GridConfig, store=None, breaker: CircuitBreaker | None = None,
+                 monitor_interval: float = 0.0, profit_guard: ProfitGuard | None = None) -> None:
         self.ex = exchange
         self.cfg = cfg
         self.store = store
         self.breaker = breaker
+        self.profit_guard = profit_guard
         self.monitor_interval = monitor_interval  # seconds; <=0 disables re-center/monitor
         self.state = GridState.INITIALIZING
         self.levels: list[Decimal] = []
@@ -45,7 +50,8 @@ class GridEngine:
         self.upper = cfg.upper
         self._lower_ratio = Decimal(1)
         self._upper_ratio = Decimal(1)
-        self.halt_reason = ""
+        self.exit_reason = ""
+        self.exit_kind = ""
 
     async def start(self) -> list[Order]:
         meta = await self.ex.market_meta(self.cfg.market)
@@ -70,14 +76,14 @@ class GridEngine:
     # ---- live adaptation: re-center to follow price ----
 
     async def maybe_recenter(self) -> bool:
-        """One supervisory check: enforce the breaker on unrealized PnL, then
+        """One supervisory check: enforce risk/profit guards on unrealized PnL, then
         re-center the grid if price has left the band. Returns True if re-centered.
         Called every `monitor_interval`s by `monitor` (and directly in tests)."""
         if self.state is not GridState.RUNNING:
             return False
         bid, ask = await self.ex.best_bid_ask(self.cfg.market)
         mid = (bid + ask) / 2
-        await self._check_safety(mid)
+        await self._check_guards(mid)
         if self.state is not GridState.RUNNING:
             return False
         if self.lower <= mid <= self.upper:
@@ -87,8 +93,9 @@ class GridEngine:
 
     async def _recenter(self, new_mid: Decimal) -> None:
         """Cancel the stale grid and re-lay it around `new_mid`, same band shape.
-        Inventory and realized PnL carry over; a fresh generation namespaces the
-        new external_ids so they never collide with already-seen orderLinkIds."""
+        Inventory-aware: when net long, never place a BUY above the average entry
+        (no averaging up into a pump). Inventory + realized PnL carry over; a fresh
+        generation namespaces the new external_ids so they never collide."""
         self.state = GridState.REBALANCING
         await self.ex.cancel_all(self.cfg.market)
         self.center = new_mid
@@ -97,13 +104,19 @@ class GridEngine:
         self.levels = [quantize(p, self.tick)
                        for p in levels_for(self.lower, self.upper, self.cfg.levels, self.cfg.spacing)]
         self._gen += 1
-        for o in build_grid_orders(self.cfg, self.levels, new_mid, self._gen):
+        orders = build_grid_orders(self.cfg, self.levels, new_mid, self._gen)
+        net = self.net_inventory()
+        if net > 0:  # don't add to a long above its own average entry
+            avg = self._avg_entry()
+            orders = [o for o in orders if not (o.side is Side.BUY and o.price > avg)]
+        for o in orders:
             await self.ex.place_order(o)
         self.state = GridState.RUNNING
-        print(f"  ~ recenter -> mid {new_mid} band [{self.lower}, {self.upper}] gen {self._gen}")
+        print(f"  ~ recenter -> mid {new_mid} band [{self.lower}, {self.upper}] gen {self._gen} "
+              f"({len(orders)} orders, net_inv {net})")
 
     async def monitor(self) -> None:
-        """Background loop: re-center on band-exit and enforce risk caps until stop."""
+        """Background loop: re-center on band-exit and enforce guards until stop."""
         if self.monitor_interval <= 0:
             return
         while self.state in (GridState.RUNNING, GridState.REBALANCING):
@@ -115,7 +128,7 @@ class GridEngine:
             except Exception as e:  # noqa: BLE001 — a bad tick must not kill the loop
                 print(f"  ! monitor tick failed: {e}")
 
-    # ---- risk ----
+    # ---- risk + profit ----
 
     def net_inventory(self) -> Decimal:
         """Open long base qty (BUYs not yet matched by a SELL)."""
@@ -124,20 +137,35 @@ class GridEngine:
     def unrealized(self, mark: Decimal) -> Decimal:
         return sum(((mark - bp) * bq for bp, bq in self._inv), Decimal(0))
 
-    async def _check_safety(self, mark: Decimal | None = None) -> None:
-        if self.breaker is None or self.state is not GridState.RUNNING:
+    def _avg_entry(self) -> Decimal:
+        qty = self.net_inventory()
+        if qty == 0:
+            return Decimal(0)
+        cost = sum((bp * bq for bp, bq in self._inv), Decimal(0))
+        return cost / qty
+
+    async def _check_guards(self, mark: Decimal | None = None) -> None:
+        if self.state is not GridState.RUNNING:
             return
         pnl = self.realized + (self.unrealized(mark) if mark is not None else Decimal(0))
-        reason = self.breaker.check(self.net_inventory(), pnl)
-        if reason:
-            await self._halt(reason)
+        if self.breaker is not None:
+            reason = self.breaker.check(self.net_inventory(), pnl)
+            if reason:
+                await self._exit(reason, "circuit-breaker")
+                return
+        if self.profit_guard is not None and mark is not None:
+            reason = self.profit_guard.check(pnl)
+            if reason:
+                await self._exit(reason, "profit-lock")
 
-    async def _halt(self, reason: str) -> None:
+    async def _exit(self, reason: str, kind: str) -> None:
+        """Emergency/profit exit: stop the grid, cancel everything, flatten."""
         if self.state is GridState.HALTED:
             return
         self.state = GridState.HALTED
-        self.halt_reason = reason
-        print(f"  !! circuit breaker tripped: {reason} — cancel_all + flatten")
+        self.exit_reason = reason
+        self.exit_kind = kind
+        print(f"  !! {kind}: {reason} — cancel_all + flatten")
         try:
             await self.ex.cancel_all(self.cfg.market)
         except Exception as e:  # noqa: BLE001
@@ -155,7 +183,7 @@ class GridEngine:
         self._fills.append(fill)
         self.fill_count += 1
         self._match_pnl(fill)
-        await self._check_safety(fill.price)  # risk cap before placing more orders
+        await self._check_guards(fill.price)  # risk + profit guards before placing more orders
         if self.state is not GridState.RUNNING:
             return None
         self._nonce += 1

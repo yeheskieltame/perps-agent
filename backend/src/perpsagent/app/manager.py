@@ -15,14 +15,18 @@ class GridManager:
     def __init__(self) -> None:
         self._engines: dict[str, GridEngine] = {}
         self._tasks: dict[str, asyncio.Task] = {}
+        self._monitors: dict[str, asyncio.Task] = {}
 
-    async def create(self, exchange, cfg: GridConfig, store=None) -> GridEngine:
-        engine = GridEngine(exchange, cfg, store)
+    async def create(self, exchange, cfg: GridConfig, store=None, breaker=None,
+                     monitor_interval: float = 0.0) -> GridEngine:
+        engine = GridEngine(exchange, cfg, store, breaker=breaker, monitor_interval=monitor_interval)
         await engine.start()
         if store is not None and hasattr(store, "save_instance"):
             await store.save_instance(cfg)
         self._engines[cfg.instance_id] = engine
         self._tasks[cfg.instance_id] = asyncio.create_task(engine.consume())
+        if monitor_interval > 0:  # background re-center + risk supervisor
+            self._monitors[cfg.instance_id] = asyncio.create_task(engine.monitor())
         return engine
 
     async def stop(self, instance_id: str) -> None:
@@ -31,9 +35,10 @@ class GridManager:
             await engine.stop()
             if engine.store is not None and hasattr(engine.store, "set_state"):
                 await engine.store.set_state(instance_id, "CLOSED")
-        task = self._tasks.pop(instance_id, None)
-        if task is not None:
-            task.cancel()
+        for registry in (self._tasks, self._monitors):
+            task = registry.pop(instance_id, None)
+            if task is not None:
+                task.cancel()
 
     async def recover(self, store, exchange) -> list[GridEngine]:
         """Rebuild engines for open instances from persisted state (replays PnL).

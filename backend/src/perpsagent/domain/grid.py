@@ -36,20 +36,28 @@ def quantize(value: Decimal, tick: Decimal, side: Side | None = None) -> Decimal
     return (value / tick).quantize(Decimal(1), rounding=rounding) * tick
 
 
+def levels_for(lower: Decimal, upper: Decimal, n: int, spacing: Spacing) -> list[Decimal]:
+    """Build n price levels in [lower, upper] with the given spacing. Shared by the
+    initial grid and by live re-centering (same band width, shifted center)."""
+    fn = geometric_levels if spacing is Spacing.GEOMETRIC else arithmetic_levels
+    return fn(lower, upper, n)
+
+
 def plan_levels(cfg: GridConfig) -> list[Decimal]:
     if cfg.levels > cfg.max_levels:
         raise ValueError(f"levels {cfg.levels} exceeds max_levels {cfg.max_levels}")
-    fn = geometric_levels if cfg.spacing is Spacing.GEOMETRIC else arithmetic_levels
-    return fn(cfg.lower, cfg.upper, cfg.levels)
+    return levels_for(cfg.lower, cfg.upper, cfg.levels, cfg.spacing)
 
 
 def _external_id(instance_id: str, level: int, nonce: int) -> str:
     return f"grid-{instance_id}-L{level}-{nonce}"
 
 
-def build_grid_orders(cfg: GridConfig, levels: list[Decimal], mid: Decimal) -> list[Order]:
-    """Initial grid: BUY at every level below mid, SELL at every level above.
-    The level nearest mid is skipped to avoid an immediate self-cross."""
+def build_grid_orders(cfg: GridConfig, levels: list[Decimal], mid: Decimal, nonce: int = 0) -> list[Order]:
+    """Grid: BUY at every level below mid, SELL at every level above. The level
+    nearest mid is skipped to avoid an immediate self-cross. `nonce` namespaces
+    the external_ids per generation so re-centered grids never collide with the
+    venue's already-seen orderLinkIds."""
     orders: list[Order] = []
     for i, price in enumerate(levels):
         if price < mid:
@@ -65,7 +73,7 @@ def build_grid_orders(cfg: GridConfig, levels: list[Decimal], mid: Decimal) -> l
                 side=side,
                 price=price,
                 qty=cfg.order_size,
-                external_id=_external_id(cfg.instance_id, i, 0),
+                external_id=_external_id(cfg.instance_id, i, nonce),
                 level=i,
             )
         )

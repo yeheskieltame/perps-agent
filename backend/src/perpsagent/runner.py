@@ -17,6 +17,7 @@ from decimal import Decimal
 
 from .agent.loop import LearningLoop
 from .app.manager import GridManager
+from .app.safety import CircuitBreaker
 from .config import Settings
 from .domain.models import Venue
 
@@ -63,17 +64,30 @@ def _build(s: Settings, mode: str, venue_choice: str):
     return FakeExchange({"mid": "100", "tick": "0.1"}), MemoryChain(), Venue.FAKE, [], None
 
 
-async def run(mode: str, market: str, venue_choice: str) -> None:
+async def run(mode: str, market: str, venue_choice: str, leverage: Decimal = Decimal(1),
+              recenter_interval: float = 0.0, max_inventory: str = "0", max_drawdown: str = "0") -> None:
     s = Settings()
     s.assert_consistent()
     ex, chain, venue, signals, store = _build(s, mode, venue_choice)
-    loop = LearningLoop(ex, chain, GridManager(), signals=signals, venue=venue, store=store)
+
+    # Risk supervisor + re-center are live-only (the dry demo drives price by hand).
+    breaker = None
+    monitor_interval = 0.0
+    if mode == "live":
+        breaker = CircuitBreaker(max_inventory=Decimal(max_inventory), max_drawdown=Decimal(max_drawdown))
+        monitor_interval = recenter_interval
+
+    loop = LearningLoop(ex, chain, GridManager(), signals=signals, venue=venue, store=store,
+                        breaker=breaker, recenter_interval=monitor_interval)
     recovered = await loop.recover()
     if recovered:
         print(f"[{mode}] recovered {len(recovered)} open instance(s) from store")
 
-    iid, cfg, tx = await loop.plan_and_launch(market)
-    print(f"[{mode}/{venue.value}] launched {iid}  commit={tx[:18]}…  grid [{cfg.lower}, {cfg.upper}] x{cfg.levels}")
+    iid, cfg, tx = await loop.plan_and_launch(market, leverage=leverage)
+    rc = f"every {monitor_interval:g}s" if monitor_interval > 0 else "off"
+    cap = breaker.max_inventory if breaker else "-"
+    print(f"[{mode}/{venue.value}] launched {iid}  commit={tx[:18]}…  grid [{cfg.lower}, {cfg.upper}] "
+          f"x{cfg.levels}  lev={cfg.leverage}x  recenter={rc}  invCap={cap}")
 
     print(f"  rationale: {loop.rationale(iid)}")
 
@@ -100,8 +114,19 @@ def main() -> None:
     ap.add_argument("--mode", choices=["dry", "live"], default="dry")
     ap.add_argument("--venue", choices=["bybit", "mantle_dex"], default="bybit")
     ap.add_argument("--market", default="BTCUSDT")
+    ap.add_argument("--leverage", default=None, help="user-chosen leverage, e.g. 10 (default: .env PERPSAGENT_LEVERAGE or 1)")
+    ap.add_argument("--recenter-interval", type=float, default=None,
+                    help="live re-center cadence in seconds; 0 disables (default: .env or 15)")
+    ap.add_argument("--max-inventory", default=None, help="circuit-breaker net-position cap; 0 = auto from grid size")
+    ap.add_argument("--max-drawdown", default=None, help="circuit-breaker loss cap in quote units; 0 = disabled")
     args = ap.parse_args()
-    asyncio.run(run(args.mode, args.market, args.venue))
+
+    s = Settings()  # defaults for any flag left unset
+    leverage = Decimal(args.leverage if args.leverage is not None else (s.leverage or "1"))
+    recenter = args.recenter_interval if args.recenter_interval is not None else s.recenter_interval_s
+    max_inv = args.max_inventory if args.max_inventory is not None else s.max_inventory
+    max_dd = args.max_drawdown if args.max_drawdown is not None else s.max_drawdown
+    asyncio.run(run(args.mode, args.market, args.venue, leverage, recenter, max_inv, max_dd))
 
 
 if __name__ == "__main__":

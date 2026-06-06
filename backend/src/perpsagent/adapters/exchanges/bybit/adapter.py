@@ -101,6 +101,19 @@ class BybitExchange:
         res = await self._get("/v5/market/orderbook", {"category": self._category, "symbol": market, "limit": 1})
         return (Decimal(res["b"][0][0]), Decimal(res["a"][0][0]))
 
+    async def set_leverage(self, market: str, leverage: Decimal) -> None:
+        """v5 set-leverage. Bybit returns retCode 110043 when leverage is already
+        at this value — treat that as success."""
+        try:
+            await self._post(
+                "/v5/position/set-leverage",
+                {"category": self._category, "symbol": market,
+                 "buyLeverage": str(leverage), "sellLeverage": str(leverage)},
+            )
+        except RuntimeError as e:
+            if "110043" not in str(e):  # "leverage not modified"
+                raise
+
     async def place_order(self, order: Order) -> Order:
         res = await self._post(
             "/v5/order/create",
@@ -125,6 +138,22 @@ class BybitExchange:
 
     async def cancel_all(self, market: str) -> None:
         await self._post("/v5/order/cancel-all", {"category": self._category, "symbol": market})
+
+    async def flatten(self, market: str) -> None:
+        """Emergency exit: market-close any open position on `market` (reduce-only)."""
+        res = await self._get("/v5/position/list", {"category": self._category, "settleCoin": "USDT"})
+        for p in res.get("list", []):
+            if p.get("symbol") != market:
+                continue
+            size = Decimal(p.get("size") or "0")
+            if size == 0:
+                continue
+            close_side = "Sell" if p.get("side") == "Buy" else "Buy"
+            await self._post(
+                "/v5/order/create",
+                {"category": self._category, "symbol": market, "side": close_side,
+                 "orderType": "Market", "qty": str(size), "reduceOnly": True},
+            )
 
     async def open_orders(self, market: str) -> Sequence[Order]:
         res = await self._get("/v5/order/realtime", {"category": self._category, "symbol": market})

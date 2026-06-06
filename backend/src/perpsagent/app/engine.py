@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-from collections import deque
 from decimal import Decimal
 
 from ..domain.grid import (
@@ -41,7 +40,8 @@ class GridEngine:
         self.fill_count = 0
         self.closes = 0
         self.wins = 0
-        self._inv: deque[tuple[Decimal, Decimal]] = deque()  # open BUY inventory (price, qty)
+        self.pos_qty = Decimal(0)  # SIGNED net position (>0 long, <0 short) — mirrors the venue
+        self.pos_avg = Decimal(0)  # average entry of the current position (0 when flat)
         self._nonce = 0
         self._oid = 0  # global monotonic order-id counter — every order id is unique forever
         self._fills: list[Fill] = []
@@ -122,9 +122,10 @@ class GridEngine:
             self._gen += 1
             orders = build_grid_orders(self.cfg, self.levels, new_mid, self._gen)
             net = self.net_inventory()
-            if net > 0:  # don't add to a long above its own average entry
-                avg = self._avg_entry()
-                orders = [o for o in orders if not (o.side is Side.BUY and o.price > avg)]
+            if net > 0:    # long: don't average UP (no BUY above the entry)
+                orders = [o for o in orders if not (o.side is Side.BUY and o.price > self.pos_avg)]
+            elif net < 0:  # short: don't average DOWN (no SELL below the entry)
+                orders = [o for o in orders if not (o.side is Side.SELL and o.price < self.pos_avg)]
             for o in orders:
                 if self.state is GridState.HALTED:  # a guard fired mid-rebuild — stop placing
                     break
@@ -151,18 +152,14 @@ class GridEngine:
     # ---- risk + profit ----
 
     def net_inventory(self) -> Decimal:
-        """Open long base qty (BUYs not yet matched by a SELL)."""
-        return sum((q for _, q in self._inv), Decimal(0))
+        """SIGNED net position (>0 long, <0 short) — mirrors the venue."""
+        return self.pos_qty
 
     def unrealized(self, mark: Decimal) -> Decimal:
-        return sum(((mark - bp) * bq for bp, bq in self._inv), Decimal(0))
+        return (mark - self.pos_avg) * self.pos_qty  # correct for both long and short
 
     def _avg_entry(self) -> Decimal:
-        qty = self.net_inventory()
-        if qty == 0:
-            return Decimal(0)
-        cost = sum((bp * bq for bp, bq in self._inv), Decimal(0))
-        return cost / qty
+        return self.pos_avg
 
     async def _check_guards(self, mark: Decimal | None = None) -> None:
         if self.state not in (GridState.RUNNING, GridState.REBALANCING):  # stay armed during a re-center
@@ -202,7 +199,7 @@ class GridEngine:
             await self.store.record_fill(fill)  # persist BEFORE placing the pair
         self._fills.append(fill)
         self.fill_count += 1
-        self._match_pnl(fill)
+        self._apply_fill(fill.side, fill.price, fill.qty)
         await self._check_guards(fill.price)  # risk + profit guards before placing more orders
         if self.state is not GridState.RUNNING:
             return None
@@ -212,24 +209,29 @@ class GridEngine:
             await self._place(paired)
         return paired
 
-    def _match_pnl(self, fill: Fill) -> None:
-        if fill.side is Side.BUY:
-            self._inv.append((fill.price, fill.qty))
+    def _apply_fill(self, side: Side, price: Decimal, qty: Decimal) -> None:
+        """Signed-position accounting (mirrors a perp account): average in when a
+        fill extends the position, realize PnL when it reduces it, and re-base the
+        average when it flips. A SELL from flat opens a SHORT (not ignored)."""
+        signed = qty if side is Side.BUY else -qty
+        pos, avg = self.pos_qty, self.pos_avg
+        if pos == 0 or (pos > 0) == (signed > 0):
+            new_qty = pos + signed                      # opening / adding same side
+            self.pos_avg = (avg * abs(pos) + price * qty) / abs(new_qty)
+            self.pos_qty = new_qty
             return
-        qty = fill.qty
-        while qty > 0 and self._inv:
-            bprice, bqty = self._inv[0]
-            matched = min(qty, bqty)
-            pnl = (fill.price - bprice) * matched
-            self.realized += pnl
-            self.closes += 1
-            if pnl > 0:
-                self.wins += 1
-            qty -= matched
-            if matched >= bqty:
-                self._inv.popleft()
-            else:
-                self._inv[0] = (bprice, bqty - matched)
+        closed = min(qty, abs(pos))                     # opposite side -> close (maybe flip)
+        pnl = (price - avg) * closed if pos > 0 else (avg - price) * closed
+        self.realized += pnl
+        self.closes += 1
+        if pnl > 0:
+            self.wins += 1
+        new_qty = pos + signed
+        self.pos_qty = new_qty
+        if new_qty == 0:
+            self.pos_avg = Decimal(0)
+        elif (new_qty > 0) != (pos > 0):
+            self.pos_avg = price                        # flipped: remainder opens at this fill
 
     def rehydrate(self, fills) -> None:
         """Replay persisted fills to restore realized PnL / winrate / inventory after
@@ -237,7 +239,7 @@ class GridEngine:
         for f in fills:
             self._fills.append(f)
             self.fill_count += 1
-            self._match_pnl(f)
+            self._apply_fill(f.side, f.price, f.qty)
         self.state = GridState.RUNNING
 
     async def consume(self) -> None:

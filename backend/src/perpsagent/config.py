@@ -15,6 +15,12 @@ class Settings(BaseSettings):
     bybit_api_secret: str = ""
     bybit_testnet: bool = True
 
+    # Risk / execution — user choices, enforced on the venue (runner flags override)
+    leverage: str = "1"                # user-chosen leverage (e.g. "10"); set_leverage'd on launch
+    recenter_interval_s: float = 15.0  # live re-center supervisor cadence in seconds (0 disables)
+    max_inventory: str = "0"           # circuit-breaker net-position cap (0 = auto from grid size)
+    max_drawdown: str = "0"            # circuit-breaker loss cap in quote units (0 = disabled)
+
     # Mantle chain + deployed contracts
     mantle_rpc: str = ""
     mantle_private_key: str = ""  # signer for on-chain commit/attest/write (never commit)

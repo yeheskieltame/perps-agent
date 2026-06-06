@@ -28,12 +28,17 @@ class FakeExchange:
         self._positions: dict[str, Position] = {}
         self._fills: asyncio.Queue[Fill] = asyncio.Queue()
         self._seq = 0
+        self.leverage = Decimal(1)            # last set_leverage (test introspection)
+        self.flatten_calls: list[str] = []    # markets flattened (test introspection)
 
     async def market_meta(self, market: str) -> MarketMeta:
         return MarketMeta(market, self._tick, self._step, self._min)
 
     async def best_bid_ask(self, market: str) -> tuple[Decimal, Decimal]:
         return (self._mid - self._tick, self._mid + self._tick)
+
+    async def set_leverage(self, market: str, leverage: Decimal) -> None:
+        self.leverage = Decimal(str(leverage))
 
     async def place_order(self, order: Order) -> Order:
         self._seq += 1
@@ -49,6 +54,11 @@ class FakeExchange:
 
     async def cancel_all(self, market: str) -> None:
         self._orders = {e: o for e, o in self._orders.items() if o.market != market}
+
+    async def flatten(self, market: str) -> None:
+        self.flatten_calls.append(market)
+        await self.cancel_all(market)
+        self._positions.pop(market, None)
 
     async def open_orders(self, market: str) -> Sequence[Order]:
         return [o for o in self._orders.values() if o.market == market]

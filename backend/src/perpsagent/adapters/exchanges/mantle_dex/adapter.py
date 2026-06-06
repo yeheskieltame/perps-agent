@@ -227,10 +227,17 @@ class MantleDexExchange:
         self._send(self._lom.functions.decLimOrder(idx, 2**128 - 1, int(time.time()) + 600))
         self._send(self._lom.functions.collectLimOrder(self._acct.address, idx, 2**128 - 1, 2**128 - 1))
 
+    async def set_leverage(self, market: str, leverage: Decimal) -> None:
+        return None  # spot DEX: no leverage to set
+
     async def cancel_all(self, market: str) -> None:
         for o in await self.open_orders(market):
             if o.order_id is not None:
                 await self.cancel_order(market, o.order_id)
+
+    async def flatten(self, market: str) -> None:
+        # spot grid: no perp position to market-close; cancel resting orders.
+        await self.cancel_all(market)
 
     async def open_orders(self, market: str) -> Sequence[Order]:
         # TODO: parse LimitOrderManager.getActiveOrders(user) — confirm the on-chain

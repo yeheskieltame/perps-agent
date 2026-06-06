@@ -39,7 +39,8 @@ async def test_recenter_follows_price_out_of_band():
     prices = [o.price for o in await ex.open_orders("BTCUSDT")]
     assert prices, "a fresh grid must be resting after re-center"
     assert any(p < 105 for p in prices) and any(p > 105 for p in prices)  # straddles new mid
-    assert all(o.external_id.endswith("-1") for o in await ex.open_orders("BTCUSDT"))  # gen-1 ids
+    ids = [o.external_id for o in await ex.open_orders("BTCUSDT")]
+    assert len(ids) == len(set(ids))  # every re-placed order has a unique id (no reuse)
 
 
 async def test_no_recenter_inside_band():
@@ -121,3 +122,56 @@ async def test_recenter_does_not_average_up_into_a_pump():
     await eng.maybe_recenter()
     buys = [o for o in await ex.open_orders("BTCUSDT") if o.side is Side.BUY]
     assert buys == []  # never buy above the average long entry
+
+
+class _StrictFake(FakeExchange):
+    """Like Bybit: rejects a reused orderLinkId forever (err 110072), even after cancel."""
+    def __init__(self, cfg=None):
+        super().__init__(cfg)
+        self._seen_ids: set[str] = set()
+        self.rejections = 0
+
+    async def place_order(self, order):
+        if order.external_id in self._seen_ids:
+            self.rejections += 1
+            raise RuntimeError("OrderLinkedID is duplicate")
+        self._seen_ids.add(order.external_id)
+        return await super().place_order(order)
+
+
+class _FailOnceFake(FakeExchange):
+    """Raises on one chosen placement to simulate a mid-re-center venue error."""
+    def __init__(self, cfg=None):
+        super().__init__(cfg)
+        self.calls = 0
+        self.fail_at = None
+
+    async def place_order(self, order):
+        self.calls += 1
+        if self.calls == self.fail_at:
+            raise RuntimeError("venue boom")
+        return await super().place_order(order)
+
+
+async def test_recenter_never_reuses_order_ids():
+    ex = _StrictFake({"mid": "100", "tick": "0.1"})
+    eng = GridEngine(ex, _cfg(), monitor_interval=1.0)
+    await eng.start()
+    for f in await ex.move_price("BTCUSDT", Decimal("99.2")):  # buys fill -> paired sells (advance ids)
+        await eng.handle_fill(f)
+    for px in ["103", "106", "97", "104"]:                     # re-center repeatedly
+        await ex.move_price("BTCUSDT", Decimal(px))
+        await eng.maybe_recenter()
+    assert ex.rejections == 0              # globally-unique ids: never a duplicate
+    assert eng.state is GridState.RUNNING
+
+
+async def test_recenter_survives_place_failure_without_orphaning():
+    ex = _FailOnceFake({"mid": "100", "tick": "0.1"})
+    eng = GridEngine(ex, _cfg(), monitor_interval=1.0)
+    await eng.start()
+    ex.fail_at = ex.calls + 2                 # blow up on the 2nd order of the re-center
+    await ex.move_price("BTCUSDT", Decimal("105"))
+    await eng.maybe_recenter()
+    assert eng.state is GridState.RUNNING     # restored, NOT stuck in REBALANCING
+    assert await ex.open_orders("BTCUSDT")    # the rest of the grid still got placed

@@ -18,8 +18,9 @@ class GridManager:
         self._monitors: dict[str, asyncio.Task] = {}
 
     async def create(self, exchange, cfg: GridConfig, store=None, breaker=None,
-                     monitor_interval: float = 0.0) -> GridEngine:
-        engine = GridEngine(exchange, cfg, store, breaker=breaker, monitor_interval=monitor_interval)
+                     monitor_interval: float = 0.0, profit_guard=None) -> GridEngine:
+        engine = GridEngine(exchange, cfg, store, breaker=breaker,
+                            monitor_interval=monitor_interval, profit_guard=profit_guard)
         await engine.start()
         if store is not None and hasattr(store, "save_instance"):
             await store.save_instance(cfg)

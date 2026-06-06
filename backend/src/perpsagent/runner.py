@@ -18,7 +18,7 @@ from decimal import Decimal
 from .agent.decide import ContextualPolicy
 from .agent.loop import LearningLoop
 from .app.manager import GridManager
-from .app.safety import CircuitBreaker
+from .app.safety import CircuitBreaker, ProfitGuard
 from .config import Settings
 from .domain.models import Venue
 
@@ -67,22 +67,26 @@ def _build(s: Settings, mode: str, venue_choice: str):
 
 async def run(mode: str, market: str, venue_choice: str, leverage: Decimal = Decimal(1),
               recenter_interval: float = 0.0, max_inventory: str = "0", max_drawdown: str = "0",
-              band: str = "0.01", levels: int = 10, order_size: str = "0.01") -> None:
+              band: str = "0.01", levels: int = 10, order_size: str = "0.01",
+              take_profit: str = "0", trail: str = "0", trail_arm: str = "0") -> None:
     s = Settings()
     s.assert_consistent()
     ex, chain, venue, signals, store = _build(s, mode, venue_choice)
 
-    # Risk supervisor + re-center are live-only (the dry demo drives price by hand).
+    # Guards + re-center are live-only (the dry demo drives price by hand).
     breaker = None
+    profit_guard = None
     monitor_interval = 0.0
     if mode == "live":
         breaker = CircuitBreaker(max_inventory=Decimal(max_inventory), max_drawdown=Decimal(max_drawdown))
+        profit_guard = ProfitGuard(take_profit=Decimal(take_profit), trail_frac=Decimal(trail),
+                                   trail_arm=Decimal(trail_arm))
         monitor_interval = recenter_interval
 
     # Tunable grid shape (used when on-chain recall has no verified episode yet).
     policy = ContextualPolicy(default_band=Decimal(band), default_levels=levels, order_size=Decimal(order_size))
     loop = LearningLoop(ex, chain, GridManager(), policy=policy, signals=signals, venue=venue, store=store,
-                        breaker=breaker, recenter_interval=monitor_interval)
+                        breaker=breaker, recenter_interval=monitor_interval, profit_guard=profit_guard)
     recovered = await loop.recover()
     if recovered:
         print(f"[{mode}] recovered {len(recovered)} open instance(s) from store")
@@ -90,8 +94,10 @@ async def run(mode: str, market: str, venue_choice: str, leverage: Decimal = Dec
     iid, cfg, tx = await loop.plan_and_launch(market, leverage=leverage)
     rc = f"every {monitor_interval:g}s" if monitor_interval > 0 else "off"
     cap = breaker.max_inventory if breaker else "-"
+    pg = (f"tp={profit_guard.take_profit} trail={profit_guard.trail_frac}"
+          if profit_guard and (profit_guard.take_profit or profit_guard.trail_frac) else "off")
     print(f"[{mode}/{venue.value}] launched {iid}  commit={tx[:18]}…  grid [{cfg.lower}, {cfg.upper}] "
-          f"x{cfg.levels}  lev={cfg.leverage}x  recenter={rc}  invCap={cap}")
+          f"x{cfg.levels}  lev={cfg.leverage}x  recenter={rc}  invCap={cap}  profit-lock={pg}")
 
     print(f"  rationale: {loop.rationale(iid)}")
 
@@ -126,6 +132,9 @@ def main() -> None:
     ap.add_argument("--band", default=None, help="grid half-band fraction of mid, e.g. 0.008 = +/-0.8 pct (default 0.01)")
     ap.add_argument("--levels", type=int, default=None, help="number of grid levels (default 10)")
     ap.add_argument("--order-size", default=None, help="base qty per level, e.g. 0.005 (default 0.01)")
+    ap.add_argument("--take-profit", default=None, help="bank when total PnL >= this (quote units); 0 = off")
+    ap.add_argument("--trail", default=None, help="trailing-stop: bank after giving back this fraction of peak PnL, e.g. 0.3; 0 = off")
+    ap.add_argument("--trail-arm", default=None, help="peak PnL that must be reached before the trailing stop arms")
     args = ap.parse_args()
 
     s = Settings()  # defaults for any flag left unset
@@ -136,8 +145,11 @@ def main() -> None:
     band = args.band if args.band is not None else "0.01"
     levels = args.levels if args.levels is not None else 10
     order_size = args.order_size if args.order_size is not None else "0.01"
+    take_profit = args.take_profit if args.take_profit is not None else "0"
+    trail = args.trail if args.trail is not None else "0"
+    trail_arm = args.trail_arm if args.trail_arm is not None else "0"
     asyncio.run(run(args.mode, args.market, args.venue, leverage, recenter, max_inv, max_dd,
-                    band, levels, order_size))
+                    band, levels, order_size, take_profit, trail, trail_arm))
 
 
 if __name__ == "__main__":

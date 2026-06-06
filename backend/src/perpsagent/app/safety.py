@@ -46,3 +46,46 @@ class CircuitBreaker:
     def reset(self) -> None:
         self.tripped = False
         self.reason = ""
+
+
+@dataclass
+class ProfitGuard:
+    """Locks gains on a favorable move — the symmetric twin of CircuitBreaker
+    (which caps loss). Without it the grid rides an unrealized profit and can give
+    it all back when price reverses (the 'kok gak TP' problem).
+
+    take_profit: bank when total PnL (realized + unrealized) >= this. 0 disables.
+    trail_frac:  once PnL has peaked, bank if it gives back this fraction of the
+        peak (e.g. 0.3 = let it run, exit after a 30% pullback from the high). 0
+        disables. This is what 'rides up, then locks when it turns'.
+    trail_arm:   the peak must exceed this before the trailing stop arms (so noise
+        near breakeven doesn't trigger it).
+    """
+
+    take_profit: Decimal = Decimal(0)
+    trail_frac: Decimal = Decimal(0)
+    trail_arm: Decimal = Decimal(0)
+    peak: Decimal = Decimal(0)
+    armed: bool = False
+    tripped: bool = False
+    reason: str = ""
+
+    def check(self, pnl: Decimal) -> str | None:
+        """Return a bank-now reason if take-profit or trailing-stop fires, else None."""
+        if self.tripped:
+            return self.reason
+        if self.take_profit > 0 and pnl >= self.take_profit:
+            return self._trip(f"take-profit: pnl {pnl} >= {self.take_profit}")
+        if self.trail_frac > 0:
+            if pnl > self.peak:
+                self.peak = pnl
+            if not self.armed and self.peak > 0 and self.peak >= self.trail_arm:
+                self.armed = True
+            if self.armed and self.peak > 0 and (self.peak - pnl) >= self.peak * self.trail_frac:
+                return self._trip(f"trailing-stop: pnl {pnl} gave back >= {self.trail_frac} of peak {self.peak}")
+        return None
+
+    def _trip(self, reason: str) -> str:
+        self.tripped = True
+        self.reason = reason
+        return reason

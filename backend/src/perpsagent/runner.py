@@ -15,6 +15,7 @@ import asyncio
 import json
 from decimal import Decimal
 
+from .agent.decide import ContextualPolicy
 from .agent.loop import LearningLoop
 from .app.manager import GridManager
 from .app.safety import CircuitBreaker
@@ -65,7 +66,8 @@ def _build(s: Settings, mode: str, venue_choice: str):
 
 
 async def run(mode: str, market: str, venue_choice: str, leverage: Decimal = Decimal(1),
-              recenter_interval: float = 0.0, max_inventory: str = "0", max_drawdown: str = "0") -> None:
+              recenter_interval: float = 0.0, max_inventory: str = "0", max_drawdown: str = "0",
+              band: str = "0.01", levels: int = 10, order_size: str = "0.01") -> None:
     s = Settings()
     s.assert_consistent()
     ex, chain, venue, signals, store = _build(s, mode, venue_choice)
@@ -77,7 +79,9 @@ async def run(mode: str, market: str, venue_choice: str, leverage: Decimal = Dec
         breaker = CircuitBreaker(max_inventory=Decimal(max_inventory), max_drawdown=Decimal(max_drawdown))
         monitor_interval = recenter_interval
 
-    loop = LearningLoop(ex, chain, GridManager(), signals=signals, venue=venue, store=store,
+    # Tunable grid shape (used when on-chain recall has no verified episode yet).
+    policy = ContextualPolicy(default_band=Decimal(band), default_levels=levels, order_size=Decimal(order_size))
+    loop = LearningLoop(ex, chain, GridManager(), policy=policy, signals=signals, venue=venue, store=store,
                         breaker=breaker, recenter_interval=monitor_interval)
     recovered = await loop.recover()
     if recovered:
@@ -119,6 +123,9 @@ def main() -> None:
                     help="live re-center cadence in seconds; 0 disables (default: .env or 15)")
     ap.add_argument("--max-inventory", default=None, help="circuit-breaker net-position cap; 0 = auto from grid size")
     ap.add_argument("--max-drawdown", default=None, help="circuit-breaker loss cap in quote units; 0 = disabled")
+    ap.add_argument("--band", default=None, help="grid half-band fraction of mid, e.g. 0.008 = +/-0.8 pct (default 0.01)")
+    ap.add_argument("--levels", type=int, default=None, help="number of grid levels (default 10)")
+    ap.add_argument("--order-size", default=None, help="base qty per level, e.g. 0.005 (default 0.01)")
     args = ap.parse_args()
 
     s = Settings()  # defaults for any flag left unset
@@ -126,7 +133,11 @@ def main() -> None:
     recenter = args.recenter_interval if args.recenter_interval is not None else s.recenter_interval_s
     max_inv = args.max_inventory if args.max_inventory is not None else s.max_inventory
     max_dd = args.max_drawdown if args.max_drawdown is not None else s.max_drawdown
-    asyncio.run(run(args.mode, args.market, args.venue, leverage, recenter, max_inv, max_dd))
+    band = args.band if args.band is not None else "0.01"
+    levels = args.levels if args.levels is not None else 10
+    order_size = args.order_size if args.order_size is not None else "0.01"
+    asyncio.run(run(args.mode, args.market, args.venue, leverage, recenter, max_inv, max_dd,
+                    band, levels, order_size))
 
 
 if __name__ == "__main__":

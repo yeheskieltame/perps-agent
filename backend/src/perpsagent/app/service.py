@@ -1,7 +1,7 @@
 """GridService — the ONLY seam the UI (Telegram / web) may depend on.
 
 The bot must NEVER import the engine, adapters, or any exchange/chain SDK. Keep
-this facade small, typed, and versioned (mirrors deltaperps). See repo CLAUDE.md.
+this facade small, typed, and versioned (mirrors deltaperps).
 """
 from __future__ import annotations
 

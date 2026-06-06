@@ -18,7 +18,9 @@ import hashlib
 from collections import deque
 from decimal import Decimal
 
-from ..domain.grid import build_grid_orders, compute_paired_order, levels_for, plan_levels, quantize
+from ..domain.grid import (
+    _external_id, build_grid_orders, compute_paired_order, levels_for, plan_levels, quantize,
+)
 from ..domain.models import EpisodeOutcome, Fill, GridConfig, GridState, Order, Side
 from ..domain.pnl import risk_adjusted
 from .safety import CircuitBreaker, ProfitGuard
@@ -41,6 +43,7 @@ class GridEngine:
         self.wins = 0
         self._inv: deque[tuple[Decimal, Decimal]] = deque()  # open BUY inventory (price, qty)
         self._nonce = 0
+        self._oid = 0  # global monotonic order-id counter — every order id is unique forever
         self._fills: list[Fill] = []
         # re-center state (live band; cfg stays the committed/original band)
         self._gen = 0
@@ -69,9 +72,21 @@ class GridEngine:
         self.levels = [quantize(p, self.tick) for p in plan_levels(self.cfg)]
         orders = build_grid_orders(self.cfg, self.levels, mid, self._gen)
         for o in orders:
-            await self.ex.place_order(o)
+            await self._place(o)
         self.state = GridState.RUNNING
         return orders
+
+    async def _place(self, order: Order) -> None:
+        """Place an order with a globally-unique external_id. Venues reject a
+        reused orderLinkId even after cancel (Bybit err 110072), so a fresh id is
+        stamped on every placement. One rejected order is logged, never fatal —
+        it must not orphan the grid."""
+        self._oid += 1
+        order.external_id = _external_id(self.cfg.instance_id, order.level, self._oid)
+        try:
+            await self.ex.place_order(order)
+        except Exception as e:  # noqa: BLE001
+            print(f"  ! place {order.side.value} L{order.level} @ {order.price} failed: {e}")
 
     # ---- live adaptation: re-center to follow price ----
 
@@ -97,23 +112,28 @@ class GridEngine:
         (no averaging up into a pump). Inventory + realized PnL carry over; a fresh
         generation namespaces the new external_ids so they never collide."""
         self.state = GridState.REBALANCING
-        await self.ex.cancel_all(self.cfg.market)
-        self.center = new_mid
-        self.lower = new_mid * self._lower_ratio
-        self.upper = new_mid * self._upper_ratio
-        self.levels = [quantize(p, self.tick)
-                       for p in levels_for(self.lower, self.upper, self.cfg.levels, self.cfg.spacing)]
-        self._gen += 1
-        orders = build_grid_orders(self.cfg, self.levels, new_mid, self._gen)
-        net = self.net_inventory()
-        if net > 0:  # don't add to a long above its own average entry
-            avg = self._avg_entry()
-            orders = [o for o in orders if not (o.side is Side.BUY and o.price > avg)]
-        for o in orders:
-            await self.ex.place_order(o)
-        self.state = GridState.RUNNING
-        print(f"  ~ recenter -> mid {new_mid} band [{self.lower}, {self.upper}] gen {self._gen} "
-              f"({len(orders)} orders, net_inv {net})")
+        try:
+            await self.ex.cancel_all(self.cfg.market)
+            self.center = new_mid
+            self.lower = new_mid * self._lower_ratio
+            self.upper = new_mid * self._upper_ratio
+            self.levels = [quantize(p, self.tick)
+                           for p in levels_for(self.lower, self.upper, self.cfg.levels, self.cfg.spacing)]
+            self._gen += 1
+            orders = build_grid_orders(self.cfg, self.levels, new_mid, self._gen)
+            net = self.net_inventory()
+            if net > 0:  # don't add to a long above its own average entry
+                avg = self._avg_entry()
+                orders = [o for o in orders if not (o.side is Side.BUY and o.price > avg)]
+            for o in orders:
+                if self.state is GridState.HALTED:  # a guard fired mid-rebuild — stop placing
+                    break
+                await self._place(o)
+            print(f"  ~ recenter -> mid {new_mid} band [{self.lower}, {self.upper}] gen {self._gen} "
+                  f"({len(orders)} orders, net_inv {net})")
+        finally:
+            if self.state is GridState.REBALANCING:  # ALWAYS leave a runnable state (never orphan)
+                self.state = GridState.RUNNING
 
     async def monitor(self) -> None:
         """Background loop: re-center on band-exit and enforce guards until stop."""
@@ -145,7 +165,7 @@ class GridEngine:
         return cost / qty
 
     async def _check_guards(self, mark: Decimal | None = None) -> None:
-        if self.state is not GridState.RUNNING:
+        if self.state not in (GridState.RUNNING, GridState.REBALANCING):  # stay armed during a re-center
             return
         pnl = self.realized + (self.unrealized(mark) if mark is not None else Decimal(0))
         if self.breaker is not None:
@@ -189,7 +209,7 @@ class GridEngine:
         self._nonce += 1
         paired = compute_paired_order(self.cfg, self.levels, fill.level, fill.side, self._nonce)
         if paired is not None:
-            await self.ex.place_order(paired)
+            await self._place(paired)
         return paired
 
     def _match_pnl(self, fill: Fill) -> None:

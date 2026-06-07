@@ -18,11 +18,23 @@ class ContextualPolicy:
         default_band: Decimal = Decimal("0.01"),
         default_levels: int = 10,
         order_size: Decimal = Decimal("0.01"),
+        pin_band: bool = False,
+        pin_levels: bool = False,
+        pin_order_size: bool = False,
     ) -> None:
         self.version = version
         self.default_band = default_band
         self.default_levels = default_levels
         self.order_size = order_size
+        # explicit user choices (CLI flags) win over recalled experience — deterministic tuning
+        self.pin_band = pin_band
+        self.pin_levels = pin_levels
+        self.pin_order_size = pin_order_size
+
+    def pinned(self) -> list[str]:
+        """Names of the params the user pinned (override recall). For the rationale."""
+        return [n for n, p in (("band", self.pin_band), ("levels", self.pin_levels),
+                               ("size", self.pin_order_size)) if p]
 
     def propose(
         self,
@@ -36,10 +48,11 @@ class ContextualPolicy:
         if recalled:
             best = recalled[0]  # chain.recall returns sorted by risk_adjusted desc
             span = best.config.upper + best.config.lower
-            half_band = (best.config.upper - best.config.lower) / span if span > 0 else self.default_band
-            levels = best.config.levels
+            recalled_band = (best.config.upper - best.config.lower) / span if span > 0 else self.default_band
+            half_band = self.default_band if self.pin_band else recalled_band
+            levels = self.default_levels if self.pin_levels else best.config.levels
+            order_size = self.order_size if self.pin_order_size else best.config.order_size
             spacing = best.config.spacing
-            order_size = best.config.order_size
         else:
             half_band = self.default_band
             levels = self.default_levels

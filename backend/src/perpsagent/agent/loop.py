@@ -48,7 +48,8 @@ class LearningLoop:
         cfg = self.policy.propose(instance_id, market, mid, recalled, venue=self.venue, leverage=leverage)
         if self.breaker is not None and self.breaker.max_inventory <= 0:
             self.breaker.max_inventory = cfg.order_size * cfg.levels * 3  # default cap: 3x nominal one-sided inv
-        self._rationales[instance_id] = explain_decision(regime, recalled, cfg)
+        overrides = "/".join(self.policy.pinned()) if (recalled and self.policy.pinned()) else ""
+        self._rationales[instance_id] = explain_decision(regime, recalled, cfg, overrides)
         tx = await self.chain.commit_strategy(instance_id, cfg)  # pre-commit BEFORE trading
         await self.manager.create(self.exchange, cfg, self.store,  # execute the grid
                                   breaker=self.breaker, monitor_interval=self.recenter_interval,

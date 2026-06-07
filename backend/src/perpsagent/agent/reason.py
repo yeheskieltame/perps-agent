@@ -11,7 +11,8 @@ from __future__ import annotations
 from ..domain.models import GridConfig, MemoryRecord, RegimeFingerprint
 
 
-def explain_decision(regime: RegimeFingerprint, recalled: list[MemoryRecord], cfg: GridConfig) -> str:
+def explain_decision(regime: RegimeFingerprint, recalled: list[MemoryRecord], cfg: GridConfig,
+                     overrides: str = "") -> str:
     trend = "trending" if abs(regime.trend_strength) > 0.5 else "ranging"
     bias = "up" if regime.trend_strength > 0.05 else "down" if regime.trend_strength < -0.05 else "flat"
     smart = (
@@ -22,6 +23,8 @@ def explain_decision(regime: RegimeFingerprint, recalled: list[MemoryRecord], cf
     if recalled:
         b = recalled[0].outcome
         evidence = f"recalled {len(recalled)} verified episode(s); best risk-adj {b.risk_adjusted:.2f}, winrate {b.winrate:.0%}"
+        if overrides:
+            evidence += f"; user-pinned {overrides} override recall"
     else:
         evidence = "no prior verified episodes in this regime — using safe defaults"
     return (

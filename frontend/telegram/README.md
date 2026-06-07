@@ -1,8 +1,8 @@
-# Perps Agent — Telegram bot (FE)
+# Telegram bot (FE)
 
-aiogram bot = the product UI. Deploy / monitor / stop grids by chat.
+aiogram bot — the product UI: deploy, monitor, and stop grids by chat.
 
-**Hard rule:** never import the engine, adapters, or any exchange/chain SDK. Talk
-to the backend only through the typed `GridService` facade (+ HTTP gateway / SSE).
+Rule: never import the engine, adapters, or any exchange/chain SDK. Talk to the
+backend through the typed `GridService` facade only (over an HTTP gateway / SSE).
 
 TODO: scaffold aiogram app + allowlist middleware.

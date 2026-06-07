@@ -1,53 +1,75 @@
-# Perps Agent backend
+# Backend
 
-Python trading engine + AI agent (the Verifiable Learning Loop). Hexagonal:
-pure `domain/` core, ports, adapters behind a registry, `GridService` facade.
+Python engine + AI agent. Hexagonal: a pure `domain/` core, adapters behind a
+registry, and the `GridService` facade. Testnet-first.
 
 ```bash
 cd backend
-python -m venv .venv && . .venv/bin/activate
+python3.11 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev,bybit]"
-pytest
+pytest                                   # 56 tests
+python -m perpsagent.runner --mode dry   # full loop on fakes, no keys/network
 ```
 
 ## Layout
-- `domain/` — pure core: models · ports · grid · pnl · regime (no I/O)
-- `adapters/exchanges/` — venues behind one `ExchangePort` (+ `registry.py`)
-- `adapters/chain/` — Mantle contracts client (ledger · memory · vault)
-- `adapters/signals/` — Elfa · Nansen
-- `adapters/payments/` — x402 metering
-- `agent/` — sense · recall · decide · learn (loop)
-- `app/` — GridManager · GridService facade · safety
 
-Add a venue: new folder under `adapters/exchanges/` implementing `ExchangePort`,
-then one branch in `registry.py`. Engine + agent unchanged.
+| Path | Role |
+|------|------|
+| `domain/` | pure core: models, grid math, pnl, regime, ports (no I/O) |
+| `adapters/exchanges/` | venues behind one `ExchangePort` + `registry.py` (bybit, mantle_dex, fake) |
+| `adapters/chain/` | Mantle client: ledger, memory, vault (web3.py) |
+| `adapters/signals/` | elfa, nansen, surf — regime inputs |
+| `adapters/payments/`, `adapters/store/` | x402 metering, SQLite recovery |
+| `agent/` | the loop: sense, recall, decide, learn (+ explainable rationale) |
+| `app/` | `GridEngine`, `GridManager`, `GridService`, `safety` |
 
-## Run the dry-run (no keys, no network)
+Add a venue: one folder under `adapters/exchanges/` implementing `ExchangePort`,
+plus a `registry.py` entry. The engine and agent never change.
 
-The full Verifiable Learning Loop runs against the in-memory `FakeExchange` +
-`MemoryChain`:
+## GridService — the BE→FE seam
 
-```bash
-PYTHONPATH=src python3 scripts/demo_dry_run.py
-PYTHONPATH=src python3 -m pytest tests/ -q     # 11 tests
+The UI depends on this typed facade only (`app/service.py`), never on the engine,
+adapters, or any SDK.
+
+```
+create_grid(user_id, cfg)          -> instance_id
+stop_grid(user_id, instance_id)    -> None
+pause_grid(user_id, instance_id)   -> None
+status(user_id)                    -> [GridStatusView{instance_id, state, realized_pnl, fill_count}]
+balance(user_id)                   -> BalanceView{equity, available, currency}
 ```
 
-## Implemented vs TODO
+```mermaid
+sequenceDiagram
+  participant FE as FE (Telegram/Web)
+  participant GS as GridService
+  participant GM as GridManager
+  participant E as GridEngine
+  FE->>GS: create_grid(user_id, cfg)
+  GS->>GM: create(exchange, cfg)
+  GM->>E: start + supervise (consume fills, monitor)
+  GS-->>FE: instance_id
+  FE->>GS: status(user_id)
+  GS-->>FE: [state, realized_pnl, fills]
+  FE->>GS: stop_grid(user_id, id)
+```
 
-**Implemented & tested (40 pytest green):** pure grid math + regime keys, `FakeExchange`,
-`MemoryChain`, `GridEngine` (grid + paired fills + FIFO realized PnL), `GridManager`,
-`GridService` facade, the agent loop (sense→recall→decide→commit→execute→attest→learn),
-a real **Bybit v5** adapter, the **MantleChainClient** (web3.py → deployed contracts;
-encoding unit-tested), **Elfa + Nansen + Surf** signal clients fused into the regime (`agent/sense.py`;
-Surf adds market microstructure — vol/funding/RSI), an explainable per-decision
-rationale (`agent/reason.py`), a **SQLite store** with engine recovery
-(persist instances + fills, replay realized PnL on restart), an **x402-gated
-alpha API** (`app/alpha_api.py`: HTTP 402 → EIP-3009 USDC authorization →
-verified-alpha response + settlement receipt), and a real
-**iZiSwap (Mantle DEX)** adapter — on-chain limit-order grid with unit-tested
-price<->point math + Mantle contract defaults (same engine, swap the venue).
-`runner --mode dry` runs the full loop; `--venue mantle_dex` selects the on-chain grid.
+A separate HTTP endpoint (`app/alpha_api.py`) exposes verified `StrategyMemory`
+queries metered with x402 (pay-per-call, settled on-chain).
 
-**Next (per `plan/ROADMAP.md`):** live-verify iZiSwap `open_orders`/`stream_fills`
-on Mantle testnet; on-chain x402 settlement broadcast (code ready, needs chain);
-Telegram UI over `GridService`.
+## Runner flags
+
+```
+--mode dry|live   --venue bybit|mantle_dex   --market BTCUSDT
+--leverage N                 enforced on the venue (set_leverage)
+--band F --levels N          grid half-band fraction + level count
+--order-size Q               base qty per level
+--recenter-interval S        re-center supervisor cadence (0 = off)
+--max-inventory Q            circuit-breaker net-position cap
+--max-drawdown Q             circuit-breaker loss cap (quote)
+--trail F --trail-arm Q      trailing-stop: bank after retracing F of peak PnL
+--take-profit Q              bank when total PnL >= Q
+```
+
+Explicit flags override recalled params; unset ones are filled from on-chain
+recall. Dry mode runs the full loop on the in-memory `FakeExchange` + `MemoryChain`.

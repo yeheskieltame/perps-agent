@@ -75,14 +75,18 @@ worker, so one user = one `BybitExchange` = one private WS = no cross-user fan-o
 
 ## Structural changes
 
-### 6. Per-user exchange client (kills limits #1 and the O(N²) fan-out)
-`AppService` holds `dict[user_id -> ExchangePort]`, built from that user's keys at
-first `create_grid`. One private WS per user; `stream_fills` is consumed once and
-routed to that user's engines by `instance_id` (no other user sees it). Rate
-limits now **sum** across accounts: 100 users × ~10/s = ~1000 order-ops/s headroom.
-- Touches: `app/service.py`, a `ClientRegistry`, engine consume wiring.
-- Keep `ExchangePort` unchanged. The Bybit batch endpoint (Phase 0) means a
-  re-center is 1–2 requests, so each user stays far under their own cap.
+### 6. Per-user exchange client (kills limits #1 and the O(N²) fan-out) — SHIPPED (in-process)
+`AppService` holds one `UserSession` per user (`app/session.py`), each with its
+own `ExchangePort` (built via an injected `client_factory(user_id)`, or a single
+shared client in demo mode). One private fill stream per user, consumed **once**
+and routed to that user's engines by `instance_id` — no other user sees it
+(`GridManager.create(consume=False)` + the session router). Rate limits now **sum**
+across accounts: 100 users × ~10/s = ~1000 order-ops/s headroom.
+- Shipped: `app/service.py`, `app/session.py`, `app/manager.py` (consume flag).
+- `ExchangePort` unchanged. The Bybit batch endpoint (Phase 0) means a re-center is
+  1–2 requests, so each user stays far under their own cap.
+- Still in-process: the **source of per-user keys** (a credentials store) and
+  durable ownership are #8.
 
 ### 7. Nonce-managed on-chain worker (kills limit #2)
 One signer, one **serialized** job queue, manual nonce allocation
@@ -145,9 +149,16 @@ Raises the single-node ceiling from ~10 to tens of order-ops/s; no API changes.
 - Alpha API **TTL cache** for regime/recall.
 - All tunable via `Settings` (`bybit_rate_limit`, `bybit_max_retries`, `alpha_cache_ttl_s`).
 
-### Phase 1 — multi-tenant, single node
-Per-user exchange clients (#6) + Postgres ownership/state (#8). One process, but
-correct isolation and durable multi-user. Unblocks the Telegram product.
+### Phase 1a — per-user sessions (SHIPPED)
+Per-user exchange clients + single-consumer fill routing (#6), in-process. One
+process, but correct capital/fill isolation and ownership by session boundary.
+`AppService` is now genuinely multi-user — unblocks the Telegram product on a
+single node.
+
+### Phase 1b — durable multi-tenant
+Postgres ownership/state (#8): persist `user_id → instances → fills` and a
+credentials store for per-user keys, so a worker rebuilds its users' grids after a
+restart. Needs a new dependency (Postgres driver) + a secrets design.
 
 ### Phase 2 — durable money path
 Nonce-managed on-chain worker (#7) + Redis mirror/cache (#9) + decoupled

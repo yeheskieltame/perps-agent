@@ -18,14 +18,20 @@ class GridManager:
         self._monitors: dict[str, asyncio.Task] = {}
 
     async def create(self, exchange, cfg: GridConfig, store=None, breaker=None,
-                     monitor_interval: float = 0.0, profit_guard=None) -> GridEngine:
+                     monitor_interval: float = 0.0, profit_guard=None,
+                     consume: bool = True) -> GridEngine:
+        """Place the grid, then (by default) spawn its own fill consumer. Pass
+        `consume=False` when a caller multiplexes one fill stream across many
+        engines (per-user routing — see app/session.py); the engine is registered
+        but does not open its own stream."""
         engine = GridEngine(exchange, cfg, store, breaker=breaker,
                             monitor_interval=monitor_interval, profit_guard=profit_guard)
         await engine.start()
         if store is not None and hasattr(store, "save_instance"):
             await store.save_instance(cfg)
         self._engines[cfg.instance_id] = engine
-        self._tasks[cfg.instance_id] = asyncio.create_task(engine.consume())
+        if consume:
+            self._tasks[cfg.instance_id] = asyncio.create_task(engine.consume())
         if monitor_interval > 0:  # background re-center + risk supervisor
             self._monitors[cfg.instance_id] = asyncio.create_task(engine.monitor())
         return engine

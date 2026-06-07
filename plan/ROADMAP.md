@@ -1,20 +1,19 @@
-# Perps Agent — Roadmap
+# Status
 
-Scope: **L1 + L2 + thin on-chain grid (Mantle DEX, spot)**. On-chain perp = later.
-See [`../docs/CONCEPT.md`](../docs/CONCEPT.md) §8–9.
+Scope: L1 + L2 + on-chain spot grid (Mantle DEX). On-chain perp is later.
 
-## Milestones (~4 weeks to Demo Day, 2–3 Jul 2026)
-- **W1 — Spine.** Bybit adapter (testnet) + port grid engine; `StrategyLedger`
-  (commit/attest) on Mantle testnet; backtest harness to seed `StrategyMemory`.
-- **W2 — Brain (L1).** `StrategyMemory` + recall; agent loop
-  (sense→recall→decide→commit→execute→attest); Elfa + Nansen clients; Telegram MVP.
-- **W3 — Vault + on-chain grid + learning (L2).** `Vault` + x402 metering; thin
-  iZiSwap grid adapter (1 market); contextual policy w/ experience replay; Verifier page.
-- **W4 — Demo polish.** Ablation (baseline vs memory-on); end-to-end testnet run;
-  deck, video, deployed contract addresses.
+## Shipped
 
-## Definition of done (hackathon)
-- Vertical slice: chat → commit on-chain → grid trades on Bybit testnet → attest
-  on-chain → Verifier page recomputes equity from chain.
-- Ablation chart: higher winrate / lower drawdown with on-chain memory.
-- Deployed contract addresses + open-source repo + >=2 min demo video.
+- Contracts live on Mantle Sepolia (Ledger, Memory, Vault); commit/attest/recall
+  round-trip verified.
+- Agent loop end-to-end: sense → recall → decide → commit → execute → attest → learn.
+- Adaptive grid engine: dynamic re-center (inventory-aware), circuit breaker,
+  take-profit / trailing-stop, signed-position accounting, tunable params.
+- Adapters: Bybit v5 (execution), iZiSwap (on-chain grid), Elfa/Nansen/Surf
+  (signals), x402 metering, SQLite recovery. 56 backend tests.
+
+## Next
+
+- Frontend scaffolds (Telegram bot, web Verifier) over `GridService`.
+- Equity-curve tracking for MAE / Sortino (currently `max_adverse_excursion = 0`).
+- Implement `safety` alerting; mainnet only after soak.

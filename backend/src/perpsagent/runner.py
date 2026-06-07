@@ -68,7 +68,8 @@ def _build(s: Settings, mode: str, venue_choice: str):
 async def run(mode: str, market: str, venue_choice: str, leverage: Decimal = Decimal(1),
               recenter_interval: float = 0.0, max_inventory: str = "0", max_drawdown: str = "0",
               band: str = "0.01", levels: int = 10, order_size: str = "0.01",
-              take_profit: str = "0", trail: str = "0", trail_arm: str = "0") -> None:
+              take_profit: str = "0", trail: str = "0", trail_arm: str = "0",
+              pin_band: bool = False, pin_levels: bool = False, pin_order_size: bool = False) -> None:
     s = Settings()
     s.assert_consistent()
     ex, chain, venue, signals, store = _build(s, mode, venue_choice)
@@ -84,7 +85,8 @@ async def run(mode: str, market: str, venue_choice: str, leverage: Decimal = Dec
         monitor_interval = recenter_interval
 
     # Tunable grid shape (used when on-chain recall has no verified episode yet).
-    policy = ContextualPolicy(default_band=Decimal(band), default_levels=levels, order_size=Decimal(order_size))
+    policy = ContextualPolicy(default_band=Decimal(band), default_levels=levels, order_size=Decimal(order_size),
+                              pin_band=pin_band, pin_levels=pin_levels, pin_order_size=pin_order_size)
     loop = LearningLoop(ex, chain, GridManager(), policy=policy, signals=signals, venue=venue, store=store,
                         breaker=breaker, recenter_interval=monitor_interval, profit_guard=profit_guard)
     recovered = await loop.recover()
@@ -149,7 +151,8 @@ def main() -> None:
     trail = args.trail if args.trail is not None else "0"
     trail_arm = args.trail_arm if args.trail_arm is not None else "0"
     asyncio.run(run(args.mode, args.market, args.venue, leverage, recenter, max_inv, max_dd,
-                    band, levels, order_size, take_profit, trail, trail_arm))
+                    band, levels, order_size, take_profit, trail, trail_arm,
+                    args.band is not None, args.levels is not None, args.order_size is not None))
 
 
 if __name__ == "__main__":

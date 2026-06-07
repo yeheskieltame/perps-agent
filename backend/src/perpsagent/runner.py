@@ -56,7 +56,10 @@ def _build(s: Settings, mode: str, venue_choice: str):
 
         from .adapters.exchanges.bybit.adapter import BybitExchange
 
-        ex = BybitExchange({"api_key": s.bybit_api_key, "api_secret": s.bybit_api_secret, "testnet": s.bybit_testnet})
+        ex = BybitExchange({
+            "api_key": s.bybit_api_key, "api_secret": s.bybit_api_secret, "testnet": s.bybit_testnet,
+            "rate_limit": s.bybit_rate_limit, "max_retries": s.bybit_max_retries,
+        })
         return ex, chain, Venue.BYBIT, signals, store
 
     from .adapters.chain.memory_chain import MemoryChain

@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     bybit_api_key: str = ""
     bybit_api_secret: str = ""
     bybit_testnet: bool = True
+    bybit_rate_limit: float = 10.0  # client-side req/s cap per account (0 disables)
+    bybit_max_retries: int = 3      # retries on transient Bybit/HTTP errors
 
     # Risk / execution — user choices, enforced on the venue (runner flags override)
     leverage: str = "1"                # user-chosen leverage (e.g. "10"); set_leverage'd on launch
@@ -46,6 +48,7 @@ class Settings(BaseSettings):
     x402_price: str = "10000"      # atomic units (USDC 6dp -> $0.01/call)
     x402_facilitator_url: str = ""
     alpha_port: int = 8402
+    alpha_cache_ttl_s: float = 5.0  # TTL for regime/recall responses (0 disables)
 
     def assert_consistent(self) -> None:
         """Refuse obvious env<->URL mismatches before any money path runs."""

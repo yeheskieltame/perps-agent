@@ -55,6 +55,21 @@ class ElfaSignals:
         self._key = config.get("api_key", "")
         self._base = config.get("base_url", _BASE)
         self._window = config.get("time_window", "24h")
+        self._session = None  # lazy, reused across calls
+
+    async def _sess(self):
+        if self._session is None:
+            import aiohttp
+
+            self._session = aiohttp.ClientSession(
+                headers={"x-elfa-api-key": self._key, "accept": "application/json"}
+            )
+        return self._session
+
+    async def close(self) -> None:
+        if self._session is not None:
+            await self._session.close()
+            self._session = None
 
     async def snapshot(self, market: str) -> dict:
         if not self._key:
@@ -62,16 +77,14 @@ class ElfaSignals:
         try:
             import aiohttp
 
-            headers = {"x-elfa-api-key": self._key, "accept": "application/json"}
-            params = {"timeWindow": self._window}
-            async with aiohttp.ClientSession() as s:
-                async with s.get(
-                    f"{self._base}/v2/aggregations/trending-tokens",
-                    headers=headers, params=params, timeout=aiohttp.ClientTimeout(total=10),
-                ) as r:
-                    if r.status != 200:
-                        return {"social_momentum": 0.0}
-                    data = await r.json()
+            s = await self._sess()
+            async with s.get(
+                f"{self._base}/v2/aggregations/trending-tokens",
+                params={"timeWindow": self._window}, timeout=aiohttp.ClientTimeout(total=10),
+            ) as r:
+                if r.status != 200:
+                    return {"social_momentum": 0.0}
+                data = await r.json()
             return parse_trending(data, base_symbol(market))
         except Exception:
             return {"social_momentum": 0.0}

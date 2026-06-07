@@ -2,6 +2,8 @@
 signals (Elfa real-time, Nansen smart-money). (docs/CONCEPT.md §3 step 1)"""
 from __future__ import annotations
 
+import asyncio
+
 from ..domain.models import RegimeFingerprint
 
 
@@ -17,8 +19,12 @@ async def classify_regime(exchange, market: str, signals: list | None = None) ->
     vol_z = 0.0
     smart_money = 0.0
     social = 0.0
-    for s in signals or []:
-        snap = await s.snapshot(market)
+    # Fan out the signals in parallel — total latency is the slowest one, not the
+    # sum. A signal that errors fails soft (it is skipped, never sinks the fusion).
+    snaps = await asyncio.gather(*(s.snapshot(market) for s in (signals or [])), return_exceptions=True)
+    for snap in snaps:
+        if not isinstance(snap, dict):
+            continue
         realized_vol = max(realized_vol, float(snap.get("realized_vol", 0.0)))
         trend += float(snap.get("trend_strength", 0.0))
         funding += float(snap.get("funding_rate", 0.0))

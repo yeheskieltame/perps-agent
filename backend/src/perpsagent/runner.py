@@ -127,6 +127,8 @@ async def run(mode: str, market: str, venue_choice: str, leverage: Decimal = Dec
         except (KeyboardInterrupt, asyncio.CancelledError):
             print("[live] closing gracefully — cancel orders → attest → write memory. JANGAN Ctrl-C lagi…")
             out = await asyncio.shield(loop.close_and_learn(iid))
+            if hasattr(loop.chain, "drain"):  # let fire-then-confirm attest/memory land
+                await asyncio.shield(loop.chain.drain())
             print(f"[live] episode attested: fills={out.fill_count} winrate={out.winrate:.0%} pnl={out.realized_pnl}")
 
 

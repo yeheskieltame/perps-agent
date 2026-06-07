@@ -88,16 +88,18 @@ across accounts: 100 users × ~10/s = ~1000 order-ops/s headroom.
 - Still in-process: the **source of per-user keys** (a credentials store) and
   durable ownership are #8.
 
-### 7. Nonce-managed on-chain worker (kills limit #2)
-One signer, one **serialized** job queue, manual nonce allocation
-(`get_transaction_count(pending)` once, then increment in-process), and
-**fire-then-confirm** instead of blocking each launch on a receipt.
-- `commit_strategy` must still happen **before** trading — so the *commit* job is
-  awaited, but `attest`/`write_memory` are enqueued and confirmed asynchronously.
-- For throughput beyond one signer: a small **pool of platform wallets**, each
-  with its own nonce lane; jobs hash-partitioned across them.
-- Touches: `adapters/chain/client.py` (extract a `NonceManager` + queue),
-  `agent/loop.py` (await commit, enqueue attest/learn).
+### 7. Nonce-managed on-chain worker (kills limit #2) — SHIPPED
+`NonceManager` (`adapters/chain/nonce.py`): one signer seeds its nonce ONCE, then
+hands out strictly increasing nonces under a lock — concurrent sends can't collide.
+Submission no longer waits for a receipt, so txs **pipeline** (nonce N, N+1, …) and
+confirm in parallel; throughput is bounded by block inclusion, not serial
+round-trips. `commit_strategy`/`settle_fee` are **confirmed inline** (pre-commitment
+/ money must land first); `attest`/`write_memory` are **fire-then-confirm** (return
+on submit, confirm in the background, revert logged not raised). `client.drain()`
+awaits in-flight confirmations on graceful shutdown.
+- Shipped: `adapters/chain/nonce.py`, `adapters/chain/client.py`, `runner.py` drain.
+- Beyond one signer: a **pool of wallets**, one `NonceManager` lane each, jobs
+  hash-partitioned — same interface, drop-in.
 
 ### 8. Durable ownership + instance state → Postgres (kills limit #3, part 1) — SHIPPED
 Ownership + recovery moved behind `StorePort`: instances carry a `user_id`,
@@ -168,9 +170,14 @@ per-user keys, so a worker rebuilds its users' grids after a restart
 (`AppService.recover()`). `PostgresStore` is the production backend; SQLite remains
 a valid local backend behind the same port. Deps added under the `postgres` extra.
 
-### Phase 2 — durable money path
-Nonce-managed on-chain worker (#7) + Redis mirror/cache (#9) + decoupled
-persistence (#11).
+### Phase 2a — nonce-managed on-chain worker (SHIPPED)
+Race-free, pipelined on-chain writes (#7): commit/settle confirmed inline,
+attest/memory fire-then-confirm. Kills the wallet-nonce hard limit on a single
+signer; a wallet pool extends it linearly.
+
+### Phase 2b — shared cache + decoupled persistence
+Redis mirror/cache (#9, shared across UI replicas; atomic detail-mirror writes) +
+fully decoupled fills persistence (#11). Needs Redis infra.
 
 ### Phase 3 — horizontal shards
 N workers routed by `user_id` (#10) + wallet pool. Linear scale to the target.

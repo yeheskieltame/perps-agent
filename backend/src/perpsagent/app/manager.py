@@ -63,6 +63,11 @@ class GridManager:
         if engine is not None:
             engine.pause()
 
+    def register(self, engine: GridEngine) -> None:
+        """Adopt an already-built engine (e.g. one rehydrated during recovery)
+        without starting it — the caller drives its fills."""
+        self._engines[engine.cfg.instance_id] = engine
+
     def get(self, instance_id: str) -> GridEngine | None:
         return self._engines.get(instance_id)
 

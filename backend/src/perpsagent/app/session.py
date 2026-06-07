@@ -34,7 +34,20 @@ class UserSession:
             self.exchange, cfg, self.store, breaker=breaker,
             monitor_interval=monitor_interval, profit_guard=profit_guard, consume=False,
         )
+        if self.store is not None and hasattr(self.store, "set_owner"):
+            await self.store.set_owner(cfg.instance_id, self.user_id)  # durable ownership
         self._ensure_router()  # start the shared consumer on the first grid
+        return engine
+
+    async def recover_instance(self, cfg: GridConfig) -> GridEngine:
+        """Rebuild one persisted grid: replay its fills (restores realized PnL /
+        inventory) and register it under this user's consumer. Does NOT re-place
+        orders — that needs venue reconciliation (roadmap, mirrors GridManager)."""
+        engine = GridEngine(self.exchange, cfg, self.store)
+        if self.store is not None and hasattr(self.store, "load_fills"):
+            engine.rehydrate(await self.store.load_fills(cfg.instance_id))
+        self.manager.register(engine)
+        self._ensure_router()
         return engine
 
     def has(self, instance_id: str) -> bool:

@@ -5,6 +5,7 @@ this facade small, typed, and versioned (mirrors deltaperps).
 """
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from typing import Callable, Protocol, Sequence
 
@@ -55,8 +56,21 @@ class AppService:
         self._sessions: dict[int, UserSession] = {}
 
     async def create_grid(self, user_id: int, cfg: GridConfig) -> str:
-        await self._session(user_id).create(cfg)
+        session = await self._session(user_id)
+        await session.create(cfg)
         return cfg.instance_id
+
+    async def recover(self) -> list[tuple[int, str]]:
+        """Rebuild every open grid under its owning user from the store (replays
+        PnL; no re-place). Call once on worker startup. Returns (user_id, instance_id)."""
+        if self._store is None or not hasattr(self._store, "load_open_with_owner"):
+            return []
+        rebuilt: list[tuple[int, str]] = []
+        for user_id, cfg in await self._store.load_open_with_owner():
+            session = await self._session(user_id)
+            await session.recover_instance(cfg)
+            rebuilt.append((user_id, cfg.instance_id))
+        return rebuilt
 
     async def stop_grid(self, user_id: int, instance_id: str) -> None:
         await self._owning_session(user_id, instance_id).stop(instance_id)
@@ -79,7 +93,8 @@ class AppService:
         ]
 
     async def balance(self, user_id: int) -> BalanceView:
-        return await self._session(user_id).exchange.balance()
+        session = await self._session(user_id)
+        return await session.exchange.balance()
 
     async def disconnect(self, user_id: int) -> None:
         """Tear down a user's session (stop the consumer, close the client)."""
@@ -89,10 +104,12 @@ class AppService:
 
     # ---- internals ----
 
-    def _session(self, user_id: int) -> UserSession:
+    async def _session(self, user_id: int) -> UserSession:
         session = self._sessions.get(user_id)
         if session is None:
             client = self._client_factory(user_id) if self._client_factory else self._exchange
+            if inspect.isawaitable(client):  # factory may be async (e.g. fetch+decrypt creds)
+                client = await client
             session = UserSession(user_id, client, self._store)
             self._sessions[user_id] = session
         return session

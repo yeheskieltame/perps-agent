@@ -29,7 +29,6 @@ def _build(s: Settings, mode: str, venue_choice: str):
         from .adapters.signals.elfa import ElfaSignals
         from .adapters.signals.nansen import NansenSignals
         from .adapters.signals.surf import SurfSignals
-        from .adapters.store.sqlite_store import SqliteStore
 
         chain = MantleChainClient(
             rpc_url=s.mantle_rpc, private_key=s.mantle_private_key,
@@ -44,7 +43,14 @@ def _build(s: Settings, mode: str, venue_choice: str):
         if s.surf_api_key:
             signals.append(SurfSignals({"api_key": s.surf_api_key, "base_url": s.surf_base_url}))
 
-        store = SqliteStore(s.store_db_path)
+        if s.postgres_dsn:  # durable multi-tenant backend (same StorePort)
+            from .adapters.store.postgres_store import PostgresStore
+
+            store = PostgresStore(s.postgres_dsn)
+        else:
+            from .adapters.store.sqlite_store import SqliteStore
+
+            store = SqliteStore(s.store_db_path)
         if venue_choice == "mantle_dex":
             from .adapters.exchanges.mantle_dex.adapter import MantleDexExchange
 

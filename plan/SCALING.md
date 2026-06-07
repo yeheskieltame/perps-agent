@@ -99,11 +99,18 @@ One signer, one **serialized** job queue, manual nonce allocation
 - Touches: `adapters/chain/client.py` (extract a `NonceManager` + queue),
   `agent/loop.py` (await commit, enqueue attest/learn).
 
-### 8. Durable ownership + instance state → Postgres (kills limit #3, part 1)
-`_owner` and recovery move behind `StorePort` on Postgres (the port already
-exists; `sqlite_store.py` documents the upgrade path). Workers are then
-stateless-on-restart: any shard can rebuild its users' grids from the DB.
-- Touches: new `PostgresStore(StorePort)`, `AppService` ownership reads/writes.
+### 8. Durable ownership + instance state → Postgres (kills limit #3, part 1) — SHIPPED
+Ownership + recovery moved behind `StorePort`: instances carry a `user_id`,
+`AppService.recover()` rebuilds every open grid under its owning user on startup
+(replays PnL; no re-place — venue reconciliation is roadmap). Per-user venue keys
+are sealed (`CredentialCodec`, Fernet) and stored as ciphertext, then turned back
+into clients by `credential_client_factory`. The store is now selectable by DSN
+(`postgres_dsn` → `PostgresStore`, else SQLite — identical surface).
+- Shipped: `adapters/store/postgres_store.py`, `adapters/store/credentials.py`,
+  `adapters/store/serde.py`, owner columns/methods in `sqlite_store.py`,
+  `AppService.recover()` + async `client_factory`, `runner.py` store selection.
+- Tested now via SQLite (recovery/ownership) + the crypto codec; `PostgresStore`
+  SQL is integration-tested under `PERPSAGENT_TEST_PG_DSN` (skips without it).
 
 ### 9. Detail mirror + caches → Redis (removes the JSON-rewrite + stampede)
 Replace the whole-file `_DetailMirror.write_text` with atomic Redis writes, and
@@ -155,10 +162,11 @@ process, but correct capital/fill isolation and ownership by session boundary.
 `AppService` is now genuinely multi-user — unblocks the Telegram product on a
 single node.
 
-### Phase 1b — durable multi-tenant
-Postgres ownership/state (#8): persist `user_id → instances → fills` and a
-credentials store for per-user keys, so a worker rebuilds its users' grids after a
-restart. Needs a new dependency (Postgres driver) + a secrets design.
+### Phase 1b — durable multi-tenant (SHIPPED)
+Postgres ownership/state (#8): persist `user_id → instances → fills` + encrypted
+per-user keys, so a worker rebuilds its users' grids after a restart
+(`AppService.recover()`). `PostgresStore` is the production backend; SQLite remains
+a valid local backend behind the same port. Deps added under the `postgres` extra.
 
 ### Phase 2 — durable money path
 Nonce-managed on-chain worker (#7) + Redis mirror/cache (#9) + decoupled
@@ -178,3 +186,6 @@ N workers routed by `user_id` (#10) + wallet pool. Linear scale to the target.
 - **Exactly-once attest** — fire-then-confirm needs an idempotency key
   (`instance_id`) so a retry never double-attests.
 - **Rebalance on shard add/remove** — consistent hashing or drain-and-migrate.
+- **Credential master key** (`PERPSAGENT_CRED_MASTER_KEY`) — rotation + backup;
+  losing it makes every stored user key unrecoverable. Never log/commit it; a real
+  deploy moves it to a KMS/secret manager.

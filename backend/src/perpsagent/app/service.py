@@ -47,13 +47,22 @@ class AppService:
     """
 
     def __init__(self, exchange=None, store=None,
-                 client_factory: Callable[[int], object] | None = None) -> None:
+                 client_factory: Callable[[int], object] | None = None,
+                 router=None, node=None) -> None:
         if exchange is None and client_factory is None:
             raise ValueError("AppService needs an `exchange` or a `client_factory`")
         self._exchange = exchange
         self._store = store
         self._client_factory = client_factory
+        # Sharding (plan/SCALING.md #10): when this worker is one shard of many,
+        # `router` + `node` let it serve/recover ONLY the users it owns. Both None
+        # (single-node) → no shard filtering.
+        self._router = router
+        self._node = str(node) if node is not None else None
         self._sessions: dict[int, UserSession] = {}
+
+    def _on_shard(self, user_id: int) -> bool:
+        return self._router is None or self._node is None or self._router.owns(user_id, self._node)
 
     async def create_grid(self, user_id: int, cfg: GridConfig) -> str:
         session = await self._session(user_id)
@@ -67,6 +76,8 @@ class AppService:
             return []
         rebuilt: list[tuple[int, str]] = []
         for user_id, cfg in await self._store.load_open_with_owner():
+            if not self._on_shard(user_id):
+                continue  # another shard owns this user
             session = await self._session(user_id)
             await session.recover_instance(cfg)
             rebuilt.append((user_id, cfg.instance_id))
@@ -105,6 +116,8 @@ class AppService:
     # ---- internals ----
 
     async def _session(self, user_id: int) -> UserSession:
+        if not self._on_shard(user_id):
+            raise PermissionError(f"user {user_id} is not on shard {self._node}")
         session = self._sessions.get(user_id)
         if session is None:
             client = self._client_factory(user_id) if self._client_factory else self._exchange

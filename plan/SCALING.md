@@ -125,11 +125,15 @@ selected by `redis_url`. The detail mirror's whole-file `write_text` is now an
   extra + `docker compose` redis service. RedisCache integration-tested under
   `REDIS_URL` (skips without it).
 
-### 10. Shard the engine plane (kills limit #3, part 2)
-Run N worker processes (one event loop each → N cores). Route by `user_id` via
-Redis. A worker owns its users' engines, WS streams, and exchange clients. This is
-the lever that turns "1 core" into linear horizontal scale.
-- Touches: deploy topology, a thin router; engine/agent code unchanged.
+### 10. Shard the engine plane (kills limit #3, part 2) — SHIPPED (code-side)
+`ShardRouter` (`app/shard.py`): consistent hashing maps `user_id → shard`, so a
+user's grids always land on the same worker and adding/removing a shard remaps only
+~1/N of users (not ~all, as `hash % N` would). Hashing is hashlib-based so every
+worker routes identically. `AppService(router=, node=)` makes a worker serve and
+recover ONLY its own users (defense-in-depth; both None = single-node, unchanged).
+- Shipped: `app/shard.py`, `AppService` shard guard + ownership-filtered recovery.
+- Remaining is **ops, not code**: running N worker processes + a gateway that routes
+  by `ShardRouter`. Engine/agent unchanged; one event loop per worker → N cores.
 
 ### 11. Separate the money path from the hot path
 On-chain confirmation, x402 settlement, and fills persistence are decoupled from
@@ -187,8 +191,12 @@ persisted durably before the paired order (Phase 1b store) and on-chain writes a
 fire-then-confirm (Phase 2a), so neither blocks the hot path. RedisCache validated
 against a real Redis via `docker compose`.
 
-### Phase 3 — horizontal shards
-N workers routed by `user_id` (#10) + wallet pool. Linear scale to the target.
+### Phase 3 — horizontal shards (SHIPPED, code-side)
+`ShardRouter` + `AppService` shard guard (#10): a worker serves/recovers only its
+own users; consistent hashing keeps scaling-out cheap. What remains is **deployment**
+— run N workers + a gateway that routes by `ShardRouter`, and (for on-chain
+throughput) a wallet pool, one `NonceManager` lane each. No further engine/agent
+code changes needed to reach the target.
 
 ---
 

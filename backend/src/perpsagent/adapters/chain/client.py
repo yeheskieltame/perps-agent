@@ -91,7 +91,11 @@ class _DetailMirror:
             "regime": regime.__dict__,
         }
         if self.path:
-            self.path.write_text(json.dumps(self._d))
+            # Atomic write: a crash (or a concurrent reader) never sees a half-written
+            # file — write a temp then rename over the target on the same filesystem.
+            tmp = self.path.with_name(self.path.name + ".tmp")
+            tmp.write_text(json.dumps(self._d))
+            tmp.replace(self.path)
 
     def get(self, key_hex: str) -> tuple[GridConfig, RegimeFingerprint] | None:
         e = self._d.get(key_hex)

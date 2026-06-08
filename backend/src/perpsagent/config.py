@@ -51,6 +51,7 @@ class Settings(BaseSettings):
     x402_facilitator_url: str = ""
     alpha_port: int = 8402
     alpha_cache_ttl_s: float = 5.0  # TTL for regime/recall responses (0 disables)
+    redis_url: str = ""             # shared alpha cache across replicas; empty = in-process
 
     def assert_consistent(self) -> None:
         """Refuse obvious env<->URL mismatches before any money path runs."""

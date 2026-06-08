@@ -59,6 +59,30 @@ Without a DSN, the store falls back to SQLite (`PERPSAGENT_STORE_DB_PATH`) and t
 PG integration tests skip. Set `PERPSAGENT_CRED_MASTER_KEY` (a Fernet key) to seal
 per-user venue keys — never commit/log it.
 
+### Sharded deploy (workers + gateway)
+
+Horizontal scale = N worker processes (one shard each) behind one stateless gateway
+that routes by `user_id` (consistent hashing — `plan/SCALING.md` #10). Each worker
+owns its users' sessions/streams/clients; the gateway holds no state.
+
+```bash
+# one worker per shard (distinct node id + port), durable store + creds shared
+PERPSAGENT_SHARD_COUNT=2 PERPSAGENT_SHARD_NODE=0 PERPSAGENT_WORKER_PORT=9000 \
+  PERPSAGENT_POSTGRES_DSN=$DSN PERPSAGENT_CRED_MASTER_KEY=$KEY \
+  python -m perpsagent.app.worker
+PERPSAGENT_SHARD_COUNT=2 PERPSAGENT_SHARD_NODE=1 PERPSAGENT_WORKER_PORT=9001 ... python -m perpsagent.app.worker
+
+# gateway in front (route map must match the shard ids)
+PERPSAGENT_SHARD_COUNT=2 PERPSAGENT_GATEWAY_PORT=8080 \
+  PERPSAGENT_SHARD_URLS='{"0":"http://127.0.0.1:9000","1":"http://127.0.0.1:9001"}' \
+  python -m perpsagent.app.gateway
+```
+
+Clients call the gateway with an `X-User-Id` header; it forwards to the owning
+worker. Sketch — no auth/retries/SSE yet (see TODOs in `app/gateway.py`), and grids
+run through the `GridService` facade (wiring the verifiable LearningLoop per user is
+the follow-up).
+
 Live: copy `.env.example` → `.env`, fill Bybit testnet keys + Mantle RPC/key + the
 3 proxy addresses + signal keys, then:
 

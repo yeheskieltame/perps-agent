@@ -1,20 +1,24 @@
-"""TTLCache — hit, expiry, and the disable switch (deterministic clock)."""
-from perpsagent.app.cache import TTLCache
+"""InProcessCache (async CachePort) — hit, expiry, disable (deterministic clock)."""
+import pytest
+
+from perpsagent.app.cache import InProcessCache
 
 
-def test_ttl_cache_hit_then_expire():
+@pytest.mark.asyncio
+async def test_hit_then_expire():
     now = [100.0]
-    c = TTLCache(ttl_s=5.0, clock=lambda: now[0])
-    assert c.get("k") is None        # miss
-    c.put("k", 42)
-    assert c.get("k") == 42          # hit
+    c = InProcessCache(ttl_s=5.0, clock=lambda: now[0])
+    assert await c.get("k") is None        # miss
+    await c.put("k", {"v": 42})
+    assert await c.get("k") == {"v": 42}   # hit
     now[0] += 4.9
-    assert c.get("k") == 42          # still fresh
-    now[0] += 0.2                    # 5.1s elapsed > 5s ttl
-    assert c.get("k") is None        # expired
+    assert await c.get("k") == {"v": 42}   # still fresh
+    now[0] += 0.2                          # 5.1s elapsed > 5s ttl
+    assert await c.get("k") is None        # expired
 
 
-def test_ttl_cache_zero_disables():
-    c = TTLCache(ttl_s=0.0, clock=lambda: 0.0)
-    c.put("k", 1)
-    assert c.get("k") is None        # ttl<=0 → nothing is cached
+@pytest.mark.asyncio
+async def test_zero_ttl_disables():
+    c = InProcessCache(ttl_s=0.0, clock=lambda: 0.0)
+    await c.put("k", 1)
+    assert await c.get("k") is None        # ttl<=0 → nothing is cached

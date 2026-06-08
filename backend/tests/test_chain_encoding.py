@@ -39,3 +39,19 @@ def test_detail_mirror_roundtrip(tmp_path):
     cfg2, reg2 = got
     assert cfg2.market == "BTCUSDT" and cfg2.levels == 10 and cfg2.lower == Decimal("99")
     assert cfg2.spacing is Spacing.GEOMETRIC and reg2.realized_vol == 0.2
+
+
+def test_detail_mirror_writes_atomically(tmp_path):
+    """Two puts both persist; the target stays valid JSON and no .tmp is left behind."""
+    import json
+    from pathlib import Path
+
+    p = Path(tmp_path / "m.json")
+    reg = RegimeFingerprint(0.2, 0.0, 0.0001, 0.02, 0.0)
+    m = _DetailMirror(str(p))
+    ch1, ch2 = config_hash(_gc("99")).hex(), config_hash(_gc("98")).hex()
+    m.put(ch1, _gc("99"), reg)
+    m.put(ch2, _gc("98"), reg)               # rewrite over the existing file
+    assert json.loads(p.read_text()).keys() >= {ch1, ch2}   # valid JSON, both present
+    assert not (tmp_path / "m.json.tmp").exists()           # temp renamed away, not left
+    assert _DetailMirror(str(p)).get(ch1) is not None and _DetailMirror(str(p)).get(ch2) is not None

@@ -17,7 +17,7 @@ from aiohttp import web
 from ..adapters.payments.x402 import X402Gateway, b64decode_json, b64encode_json
 from ..agent.recall import recall_best
 from ..agent.sense import classify_regime
-from .cache import TTLCache
+from .cache import CachePort, InProcessCache
 
 
 def _payment_middleware(gateway: X402Gateway):
@@ -63,38 +63,35 @@ def _record(r) -> dict:
 
 
 def build_app(gateway: X402Gateway, exchange, chain, signals: list | None = None,
-              cache_ttl: float = 5.0) -> web.Application:
+              cache_ttl: float = 5.0, cache: CachePort | None = None) -> web.Application:
     app = web.Application(middlewares=[_payment_middleware(gateway)])
     sigs = signals or []
     # Collapse duplicate work per market: a burst of paid calls would otherwise
-    # re-run the signal fan-out + on-chain recall on every request.
-    regime_cache: TTLCache = TTLCache(cache_ttl)
-    recall_cache: TTLCache = TTLCache(cache_ttl)
-
-    async def _regime(market: str):
-        fp = regime_cache.get(market)
-        if fp is None:
-            fp = await classify_regime(exchange, market, sigs)
-            regime_cache.put(market, fp)
-        return fp
+    # re-run the signal fan-out + on-chain recall on every request. Response BODIES
+    # are cached (JSON), so the same port works in-process or on Redis (shared
+    # across UI replicas — pass `cache=RedisCache(...)`).
+    cache = cache or InProcessCache(cache_ttl)
 
     async def healthz(_request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "service": "perpsagent-alpha"})
 
     async def regime(request: web.Request) -> web.Response:
         market = request.match_info["market"]
-        fp = await _regime(market)
-        return web.json_response({"market": market, "regime": _fp(fp)})
+        body = await cache.get(f"regime:{market}")
+        if body is None:
+            fp = await classify_regime(exchange, market, sigs)
+            body = {"market": market, "regime": _fp(fp)}
+            await cache.put(f"regime:{market}", body)
+        return web.json_response(body)
 
     async def recall(request: web.Request) -> web.Response:
         market = request.match_info["market"]
-        cached = recall_cache.get(market)
-        if cached is not None:
-            return web.json_response(cached)
-        fp = await _regime(market)
-        records = await recall_best(chain, fp)
-        body = {"market": market, "regime": _fp(fp), "episodes": [_record(r) for r in records]}
-        recall_cache.put(market, body)
+        body = await cache.get(f"recall:{market}")
+        if body is None:
+            fp = await classify_regime(exchange, market, sigs)
+            records = await recall_best(chain, fp)
+            body = {"market": market, "regime": _fp(fp), "episodes": [_record(r) for r in records]}
+            await cache.put(f"recall:{market}", body)
         return web.json_response(body)
 
     app.router.add_get("/healthz", healthz)
@@ -118,8 +115,13 @@ def main() -> None:
         default_price=s.x402_price,
         facilitator_url=s.x402_facilitator_url or None,
     )
+    cache: CachePort | None = None
+    if s.redis_url:  # shared cache across replicas
+        from ..adapters.cache.redis_cache import RedisCache
+
+        cache = RedisCache(s.redis_url, s.alpha_cache_ttl_s)
     web.run_app(build_app(gateway, FakeExchange({"mid": "100"}), MemoryChain(),
-                          cache_ttl=s.alpha_cache_ttl_s), port=s.alpha_port)
+                          cache_ttl=s.alpha_cache_ttl_s, cache=cache), port=s.alpha_port)
 
 
 if __name__ == "__main__":

@@ -26,5 +26,18 @@ services:
       interval: 2s
       timeout: 3s
       retries: 20
+  # Shared alpha-API cache across replicas (plan/SCALING.md #9).
+  #   PERPSAGENT_REDIS_URL=redis://localhost:56379/0   (app)
+  #   REDIS_URL=redis://localhost:56379/0  pytest tests/test_redis_cache.py
+  redis:
+    image: redis:7-alpine
+    container_name: perpsagent-redis
+    ports:
+      - "56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
 volumes:
   perpsagent-pgdata:

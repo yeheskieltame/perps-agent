@@ -114,11 +114,16 @@ into clients by `credential_client_factory`. The store is now selectable by DSN
 - Tested now via SQLite (recovery/ownership) + the crypto codec; `PostgresStore`
   SQL is integration-tested under `PERPSAGENT_TEST_PG_DSN` (skips without it).
 
-### 9. Detail mirror + caches → Redis (removes the JSON-rewrite + stampede)
-Replace the whole-file `_DetailMirror.write_text` with atomic Redis writes, and
-move the alpha API's `TTLCache` (Phase 0) to Redis so it's shared across UI
-replicas. recall results cached per `regimeKey`.
-- Touches: `adapters/chain/client.py` (`_DetailMirror`), `app/cache.py` (Redis backend).
+### 9. Detail mirror + caches → Redis (removes the JSON-rewrite + stampede) — SHIPPED
+`CachePort` (async) with two impls: `InProcessCache` (default) and `RedisCache`
+(shared across UI replicas — so a request burst hits one cache, not N). The alpha
+API caches response BODIES (JSON), so the same port works in-process or on Redis;
+selected by `redis_url`. The detail mirror's whole-file `write_text` is now an
+**atomic** temp-write + rename (no half-written file on crash / concurrent read).
+- Shipped: `app/cache.py`, `adapters/cache/redis_cache.py`, `app/alpha_api.py`
+  (pluggable cache), atomic `_DetailMirror` in `adapters/chain/client.py`, `redis`
+  extra + `docker compose` redis service. RedisCache integration-tested under
+  `REDIS_URL` (skips without it).
 
 ### 10. Shard the engine plane (kills limit #3, part 2)
 Run N worker processes (one event loop each → N cores). Route by `user_id` via
@@ -175,9 +180,12 @@ Race-free, pipelined on-chain writes (#7): commit/settle confirmed inline,
 attest/memory fire-then-confirm. Kills the wallet-nonce hard limit on a single
 signer; a wallet pool extends it linearly.
 
-### Phase 2b — shared cache + decoupled persistence
-Redis mirror/cache (#9, shared across UI replicas; atomic detail-mirror writes) +
-fully decoupled fills persistence (#11). Needs Redis infra.
+### Phase 2b — shared cache + decoupled persistence (SHIPPED)
+Redis-backed alpha cache behind `CachePort` (#9) + atomic detail-mirror writes.
+Decoupled persistence (#11) is substantially in place from prior phases: fills are
+persisted durably before the paired order (Phase 1b store) and on-chain writes are
+fire-then-confirm (Phase 2a), so neither blocks the hot path. RedisCache validated
+against a real Redis via `docker compose`.
 
 ### Phase 3 — horizontal shards
 N workers routed by `user_id` (#10) + wallet pool. Linear scale to the target.

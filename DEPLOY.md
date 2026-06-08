@@ -36,9 +36,28 @@ forge script script/Deploy.s.sol:Deploy \
 cd backend
 python3.11 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev,bybit]"
-pytest                                          # 56 tests
+pytest                                          # 92 tests (+2 PG when a DSN is set)
 python -m perpsagent.runner --mode dry          # full loop on fakes, no keys
 ```
+
+### Durable store (Postgres via Docker)
+
+The multi-tenant store + encrypted credentials run on Postgres (`.[postgres]`
+extra). Spin a local one up and point the app/tests at it:
+
+```bash
+cd backend
+pip install -e ".[postgres]"
+docker compose up -d --wait                     # local PG on :55432
+DSN=postgresql://perps:perps@localhost:55432/perpsagent_test
+PERPSAGENT_TEST_PG_DSN=$DSN pytest tests/test_postgres_store.py   # PG integration tests
+PERPSAGENT_POSTGRES_DSN=$DSN python -m perpsagent.runner --mode live ...   # run on PG
+docker compose down                             # stop (-v also wipes data)
+```
+
+Without a DSN, the store falls back to SQLite (`PERPSAGENT_STORE_DB_PATH`) and the
+PG integration tests skip. Set `PERPSAGENT_CRED_MASTER_KEY` (a Fernet key) to seal
+per-user venue keys — never commit/log it.
 
 Live: copy `.env.example` → `.env`, fill Bybit testnet keys + Mantle RPC/key + the
 3 proxy addresses + signal keys, then:

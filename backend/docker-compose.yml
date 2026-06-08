@@ -1,0 +1,30 @@
+# Local Postgres for the durable multi-tenant store (plan/SCALING.md #8) and the
+# PostgresStore integration tests. Port 55432 avoids clashing with a system PG.
+#
+#   docker compose up -d
+#   # run the PG integration tests against it:
+#   PERPSAGENT_TEST_PG_DSN=postgresql://perps:perps@localhost:55432/perpsagent_test \
+#     PYTHONPATH=src python3 -m pytest tests/test_postgres_store.py -q
+#   # or run the agent on the durable store:
+#   PERPSAGENT_POSTGRES_DSN=postgresql://perps:perps@localhost:55432/perpsagent_test \
+#     PYTHONPATH=src python3 -m perpsagent.runner --mode live --venue bybit --market BTCUSDT
+#   docker compose down            # stop  (add -v to wipe the data volume)
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: perpsagent-pg
+    environment:
+      POSTGRES_USER: perps
+      POSTGRES_PASSWORD: perps
+      POSTGRES_DB: perpsagent_test
+    ports:
+      - "55432:5432"
+    volumes:
+      - perpsagent-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U perps -d perpsagent_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+volumes:
+  perpsagent-pgdata:

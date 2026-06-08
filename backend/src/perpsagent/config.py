@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     postgres_dsn: str = ""        # durable multi-tenant store; empty = use SQLite (store_db_path)
     cred_master_key: str = ""     # Fernet key for encrypting per-user venue keys (never commit/log)
 
+    # Sharded engine plane (plan/SCALING.md #10). One worker process per node.
+    shard_node: str = "0"         # this worker's node id (must be one of the shard set)
+    shard_count: int = 1          # number of shards (worker builds ShardRouter(shard_count))
+    worker_port: int = 9000       # this worker's HTTP port
+    gateway_port: int = 8080      # gateway HTTP port
+    shard_urls: str = ""          # gateway routing map, JSON {"0":"http://host:9000", ...}
+
     # x402 alpha API (pay-per-call settlement)
     x402_pay_to: str = ""          # treasury wallet receiving USDC
     x402_asset: str = ""           # USDC token address on the target chain

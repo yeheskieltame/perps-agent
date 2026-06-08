@@ -131,9 +131,12 @@ user's grids always land on the same worker and adding/removing a shard remaps o
 ~1/N of users (not ~all, as `hash % N` would). Hashing is hashlib-based so every
 worker routes identically. `AppService(router=, node=)` makes a worker serve and
 recover ONLY its own users (defense-in-depth; both None = single-node, unchanged).
-- Shipped: `app/shard.py`, `AppService` shard guard + ownership-filtered recovery.
-- Remaining is **ops, not code**: running N worker processes + a gateway that routes
-  by `ShardRouter`. Engine/agent unchanged; one event loop per worker → N cores.
+- Shipped: `app/shard.py`, `AppService` shard guard + ownership-filtered recovery,
+  and the deploy scaffold — `app/worker.py` (serves one shard over HTTP, recovers its
+  users) + `app/gateway.py` (stateless reverse-proxy routing by `ShardRouter`).
+- Remaining is **ops**: run N workers + the gateway (see DEPLOY.md), a wallet pool
+  for on-chain throughput, and harden the gateway (auth/retries/SSE). Engine/agent
+  unchanged; one event loop per worker → N cores.
 
 ### 11. Separate the money path from the hot path
 On-chain confirmation, x402 settlement, and fills persistence are decoupled from

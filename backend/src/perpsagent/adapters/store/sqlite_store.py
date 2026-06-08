@@ -8,19 +8,20 @@ never blocks. Upgrade path: Postgres behind the same StorePort.
 from __future__ import annotations
 
 import asyncio
-import json
 import sqlite3
 import threading
 import time
 from decimal import Decimal
 from typing import Sequence
 
-from ...domain.models import Fill, GridConfig, Side, Spacing, Venue
+from ...domain.models import Fill, GridConfig, Side
+from .serde import cfg_to_json, json_to_cfg
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS instances (
     instance_id TEXT PRIMARY KEY,
-    venue TEXT, market TEXT, config TEXT, state TEXT, created_at INTEGER, regime TEXT
+    venue TEXT, market TEXT, config TEXT, state TEXT, created_at INTEGER, regime TEXT,
+    user_id INTEGER
 );
 CREATE TABLE IF NOT EXISTS fills (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,27 +31,6 @@ CREATE TABLE IF NOT EXISTS fills (
 CREATE INDEX IF NOT EXISTS idx_fills_instance ON fills(instance_id);
 """
 _OPEN_STATES = ("INITIALIZING", "RUNNING", "REBALANCING")
-
-
-def _cfg_to_json(c: GridConfig) -> str:
-    return json.dumps({
-        "instance_id": c.instance_id, "venue": c.venue.value, "market": c.market,
-        "lower": str(c.lower), "upper": str(c.upper), "levels": c.levels,
-        "order_size": str(c.order_size), "spacing": c.spacing.value,
-        "leverage": str(c.leverage), "max_levels": c.max_levels,
-        "policy_version": c.policy_version,
-    })
-
-
-def _json_to_cfg(s: str) -> GridConfig:
-    d = json.loads(s)
-    return GridConfig(
-        instance_id=d["instance_id"], venue=Venue(d["venue"]), market=d["market"],
-        lower=Decimal(d["lower"]), upper=Decimal(d["upper"]), levels=int(d["levels"]),
-        order_size=Decimal(d["order_size"]), spacing=Spacing(d["spacing"]),
-        leverage=Decimal(d["leverage"]), max_levels=int(d["max_levels"]),
-        policy_version=d["policy_version"],
-    )
 
 
 class SqliteStore:
@@ -67,10 +47,11 @@ class SqliteStore:
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.executescript(_SCHEMA)
-        try:  # migrate older DBs
-            self._conn.execute("ALTER TABLE instances ADD COLUMN regime TEXT")
-        except sqlite3.OperationalError:
-            pass
+        for col in ("regime TEXT", "user_id INTEGER"):  # migrate older DBs
+            try:
+                self._conn.execute(f"ALTER TABLE instances ADD COLUMN {col}")
+            except sqlite3.OperationalError:
+                pass
         self._conn.commit()
 
     async def record_fill(self, fill: Fill) -> None:
@@ -93,9 +74,30 @@ class SqliteStore:
                 "INSERT INTO instances(instance_id,venue,market,config,state,created_at,regime) VALUES(?,?,?,?,?,?,?) "
                 "ON CONFLICT(instance_id) DO UPDATE SET state=excluded.state, config=excluded.config, "
                 "regime=COALESCE(excluded.regime, instances.regime)",
-                (c.instance_id, c.venue.value, c.market, _cfg_to_json(c), state, int(time.time()), regime_json),
+                (c.instance_id, c.venue.value, c.market, cfg_to_json(c), state, int(time.time()), regime_json),
             )
             self._conn.commit()
+
+    async def set_owner(self, instance_id: str, user_id: int) -> None:
+        await asyncio.to_thread(self._set_owner, instance_id, user_id)
+
+    def _set_owner(self, instance_id: str, user_id: int) -> None:
+        with self._lock:
+            self._conn.execute("UPDATE instances SET user_id=? WHERE instance_id=?", (user_id, instance_id))
+            self._conn.commit()
+
+    async def load_open_with_owner(self) -> list[tuple[int, GridConfig]]:
+        """Open instances paired with their owner — drives per-user recovery."""
+        return await asyncio.to_thread(self._load_open_with_owner)
+
+    def _load_open_with_owner(self) -> list[tuple[int, GridConfig]]:
+        placeholders = ",".join("?" * len(_OPEN_STATES))
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT user_id, config FROM instances WHERE state IN ({placeholders}) AND user_id IS NOT NULL",
+                _OPEN_STATES,
+            ).fetchall()
+        return [(int(r[0]), json_to_cfg(r[1])) for r in rows]
 
     async def load_regime(self, instance_id: str) -> str | None:
         return await asyncio.to_thread(self._load_regime, instance_id)
@@ -122,7 +124,7 @@ class SqliteStore:
             rows = self._conn.execute(
                 f"SELECT config FROM instances WHERE state IN ({placeholders})", _OPEN_STATES
             ).fetchall()
-        return [_json_to_cfg(r[0]) for r in rows]
+        return [json_to_cfg(r[0]) for r in rows]
 
     async def load_fills(self, instance_id: str) -> list[Fill]:
         return await asyncio.to_thread(self._load_fills, instance_id)

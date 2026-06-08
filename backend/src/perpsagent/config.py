@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     surf_base_url: str = "https://api.asksurf.ai/gateway/v1"
 
     store_db_path: str = "perpsagent.db"
+    postgres_dsn: str = ""        # durable multi-tenant store; empty = use SQLite (store_db_path)
+    cred_master_key: str = ""     # Fernet key for encrypting per-user venue keys (never commit/log)
 
     # x402 alpha API (pay-per-call settlement)
     x402_pay_to: str = ""          # treasury wallet receiving USDC

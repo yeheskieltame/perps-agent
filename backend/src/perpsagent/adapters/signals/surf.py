@@ -41,11 +41,27 @@ class SurfSignals:
     def __init__(self, config: dict[str, Any]) -> None:
         self._key = config.get("api_key", "")
         self._base = config.get("base_url", _BASE)
+        self._session = None  # lazy, reused across calls (no per-call TLS handshake)
 
-    async def _get(self, session, path: str, params: dict) -> Any | None:
+    async def _sess(self):
+        if self._session is None:
+            import aiohttp
+
+            self._session = aiohttp.ClientSession(
+                headers={"Authorization": f"Bearer {self._key}", "accept": "application/json"}
+            )
+        return self._session
+
+    async def close(self) -> None:
+        if self._session is not None:
+            await self._session.close()
+            self._session = None
+
+    async def _get(self, path: str, params: dict) -> Any | None:
         try:
             import aiohttp
 
+            session = await self._sess()
             async with session.get(
                 f"{self._base}/{path}", params=params, timeout=aiohttp.ClientTimeout(total=10)
             ) as r:
@@ -60,16 +76,12 @@ class SurfSignals:
             return {}
         sym = base_symbol(market)
         try:
-            import aiohttp
-
-            headers = {"Authorization": f"Bearer {self._key}", "accept": "application/json"}
-            async with aiohttp.ClientSession(headers=headers) as s:
-                price_p, rsi_p, atr_p, fund_p = await asyncio.gather(
-                    self._get(s, "market/price", {"symbol": sym}),
-                    self._get(s, "market/price-indicator", {"indicator": "rsi", "symbol": sym}),
-                    self._get(s, "market/price-indicator", {"indicator": "atr", "symbol": sym}),
-                    self._get(s, "exchange/funding-history", {"pair": f"{sym}USDT", "limit": "1"}),
-                )
+            price_p, rsi_p, atr_p, fund_p = await asyncio.gather(
+                self._get("market/price", {"symbol": sym}),
+                self._get("market/price-indicator", {"indicator": "rsi", "symbol": sym}),
+                self._get("market/price-indicator", {"indicator": "atr", "symbol": sym}),
+                self._get("exchange/funding-history", {"pair": f"{sym}USDT", "limit": "1"}),
+            )
             out: dict[str, float] = {}
             rsi = first_value(rsi_p)
             if rsi is not None:

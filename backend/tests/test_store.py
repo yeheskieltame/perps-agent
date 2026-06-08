@@ -59,3 +59,10 @@ async def test_manager_recover(tmp_path):
         await store.record_fill(f)
     engines = await GridManager().recover(store, FakeExchange({"mid": "100"}))
     assert len(engines) == 1 and engines[0].realized == Decimal("0.02")
+
+
+@pytest.mark.asyncio
+async def test_store_enables_wal(tmp_path):
+    store = SqliteStore(str(tmp_path / "wal.db"))
+    mode = store._conn.execute("PRAGMA journal_mode").fetchone()[0]
+    assert mode.lower() == "wal"   # fast, crash-durable commits under load

@@ -17,6 +17,7 @@ from aiohttp import web
 from ..adapters.payments.x402 import X402Gateway, b64decode_json, b64encode_json
 from ..agent.recall import recall_best
 from ..agent.sense import classify_regime
+from .cache import TTLCache
 
 
 def _payment_middleware(gateway: X402Gateway):
@@ -61,23 +62,40 @@ def _record(r) -> dict:
     }
 
 
-def build_app(gateway: X402Gateway, exchange, chain, signals: list | None = None) -> web.Application:
+def build_app(gateway: X402Gateway, exchange, chain, signals: list | None = None,
+              cache_ttl: float = 5.0) -> web.Application:
     app = web.Application(middlewares=[_payment_middleware(gateway)])
     sigs = signals or []
+    # Collapse duplicate work per market: a burst of paid calls would otherwise
+    # re-run the signal fan-out + on-chain recall on every request.
+    regime_cache: TTLCache = TTLCache(cache_ttl)
+    recall_cache: TTLCache = TTLCache(cache_ttl)
+
+    async def _regime(market: str):
+        fp = regime_cache.get(market)
+        if fp is None:
+            fp = await classify_regime(exchange, market, sigs)
+            regime_cache.put(market, fp)
+        return fp
 
     async def healthz(_request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "service": "perpsagent-alpha"})
 
     async def regime(request: web.Request) -> web.Response:
         market = request.match_info["market"]
-        fp = await classify_regime(exchange, market, sigs)
+        fp = await _regime(market)
         return web.json_response({"market": market, "regime": _fp(fp)})
 
     async def recall(request: web.Request) -> web.Response:
         market = request.match_info["market"]
-        fp = await classify_regime(exchange, market, sigs)
+        cached = recall_cache.get(market)
+        if cached is not None:
+            return web.json_response(cached)
+        fp = await _regime(market)
         records = await recall_best(chain, fp)
-        return web.json_response({"market": market, "regime": _fp(fp), "episodes": [_record(r) for r in records]})
+        body = {"market": market, "regime": _fp(fp), "episodes": [_record(r) for r in records]}
+        recall_cache.put(market, body)
+        return web.json_response(body)
 
     app.router.add_get("/healthz", healthz)
     app.router.add_get("/v1/alpha/regime/{market}", regime)
@@ -100,7 +118,8 @@ def main() -> None:
         default_price=s.x402_price,
         facilitator_url=s.x402_facilitator_url or None,
     )
-    web.run_app(build_app(gateway, FakeExchange({"mid": "100"}), MemoryChain()), port=s.alpha_port)
+    web.run_app(build_app(gateway, FakeExchange({"mid": "100"}), MemoryChain(),
+                          cache_ttl=s.alpha_cache_ttl_s), port=s.alpha_port)
 
 
 if __name__ == "__main__":

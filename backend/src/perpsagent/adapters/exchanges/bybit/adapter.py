@@ -22,6 +22,9 @@ from typing import Any, AsyncIterator, Sequence
 
 from ....domain.grid import parse_external_id
 from ....domain.models import BalanceView, Fill, MarketMeta, Order, Position, Side
+from .throttle import RateLimiter, is_retryable
+
+_BATCH_MAX = 20  # Bybit v5 create-batch cap (orders per request)
 
 _REST = {True: "https://api-testnet.bybit.com", False: "https://api.bybit.com"}
 _WS_PRIVATE = {
@@ -46,6 +49,13 @@ class BybitExchange:
         self._rest = _REST[self._testnet]
         self._ws_url = _WS_PRIVATE[self._testnet]
         self._session = None  # lazy aiohttp.ClientSession
+        # Client-side pacing + retry: a single account shared by many grids will
+        # trip Bybit's per-UID/IP caps without this. rate_limit<=0 disables.
+        rate = float(config.get("rate_limit", 10.0))  # req/s, global per account
+        self._limiter = RateLimiter(rate, burst=max(rate, 1.0) * 2)
+        self._max_retries = int(config.get("max_retries", 3))
+        self._retry_base = float(config.get("retry_base", 0.5))   # backoff seconds
+        self._retry_cap = float(config.get("retry_cap", 8.0))
 
     async def _sess(self):
         if self._session is None:
@@ -74,15 +84,46 @@ class BybitExchange:
 
     async def _get(self, path: str, params: dict[str, Any]) -> dict:
         qs = "&".join(f"{k}={v}" for k, v in params.items())
-        sess = await self._sess()
-        async with sess.get(f"{self._rest}{path}?{qs}", headers=self._headers(qs)) as r:
-            return _unwrap(await r.json())
+        return _unwrap(await self._request("GET", path, qs))
 
     async def _post(self, path: str, body: dict[str, Any]) -> dict:
         raw = json.dumps(body, separators=(",", ":"))
-        sess = await self._sess()
-        async with sess.post(f"{self._rest}{path}", data=raw, headers=self._headers(raw)) as r:
-            return _unwrap(await r.json())
+        return _unwrap(await self._request("POST", path, raw))
+
+    async def _request(self, method: str, path: str, payload: str) -> dict:
+        """One signed Bybit call, paced by the rate limiter and retried with
+        exponential backoff on transient errors (HTTP 429/5xx, retCode
+        10002/10006/10016/10018). Returns the FULL envelope (callers unwrap).
+        Re-signs every attempt so a backoff never sends an expired timestamp."""
+        import aiohttp
+
+        await self._limiter.acquire()
+        delay = self._retry_base
+        attempt = 0
+        while True:
+            headers = self._headers(payload)
+            sess = await self._sess()
+            try:
+                if method == "GET":
+                    url = f"{self._rest}{path}?{payload}" if payload else f"{self._rest}{path}"
+                    async with sess.get(url, headers=headers) as r:
+                        status, resp = r.status, await r.json()
+                else:
+                    async with sess.post(f"{self._rest}{path}", data=payload, headers=headers) as r:
+                        status, resp = r.status, await r.json()
+            except (aiohttp.ClientError, asyncio.TimeoutError):
+                if attempt >= self._max_retries:
+                    raise
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, self._retry_cap)
+                attempt += 1
+                continue
+            if is_retryable(status, int(resp.get("retCode", 0) or 0)) and attempt < self._max_retries:
+                await asyncio.sleep(delay)
+                delay = min(delay * 2, self._retry_cap)
+                attempt += 1
+                continue
+            return resp
 
     # ---- ExchangePort ----
 
@@ -114,22 +155,46 @@ class BybitExchange:
             if "110043" not in str(e):  # "leverage not modified"
                 raise
 
+    def _order_payload(self, order: Order) -> dict[str, Any]:
+        """The per-order fields shared by single create and batch create (the batch
+        endpoint takes `category` once at the top level, so it is not included here)."""
+        return {
+            "symbol": order.market,
+            "side": _SIDE_OUT[order.side],
+            "orderType": "Limit",
+            "qty": str(order.qty),
+            "price": str(order.price),
+            "timeInForce": "PostOnly" if order.post_only else "GTC",
+            "orderLinkId": order.external_id,
+        }
+
     async def place_order(self, order: Order) -> Order:
-        res = await self._post(
-            "/v5/order/create",
-            {
-                "category": self._category,
-                "symbol": order.market,
-                "side": _SIDE_OUT[order.side],
-                "orderType": "Limit",
-                "qty": str(order.qty),
-                "price": str(order.price),
-                "timeInForce": "PostOnly" if order.post_only else "GTC",
-                "orderLinkId": order.external_id,
-            },
-        )
+        res = await self._post("/v5/order/create", {"category": self._category, **self._order_payload(order)})
         order.order_id = res.get("orderId")
         return order
+
+    async def place_orders(self, orders: Sequence[Order]) -> list[Order]:
+        """Batch-create up to 20 orders per request (/v5/order/create-batch) — cuts
+        one-account REST pressure ~20x vs. single creates, so a re-center (cancel +
+        re-lay the whole grid) is 1-2 round-trips instead of N. Partial failures are
+        logged per order (retExtInfo), never fatal: a holed grid beats a crash."""
+        placed: list[Order] = []
+        for chunk in _chunked(list(orders), _BATCH_MAX):
+            body = {"category": self._category, "request": [self._order_payload(o) for o in chunk]}
+            resp = await self._request("POST", "/v5/order/create-batch", json.dumps(body, separators=(",", ":")))
+            if int(resp.get("retCode", 0) or 0) != 0:  # whole batch rejected
+                print(f"  ! batch create failed: {resp.get('retCode')} {resp.get('retMsg')}")
+                placed.extend(chunk)  # order_id left unset; caller tolerates a hole
+                continue
+            rows = (resp.get("result") or {}).get("list") or []
+            codes = (resp.get("retExtInfo") or {}).get("list") or []
+            for i, o in enumerate(chunk):
+                o.order_id = (rows[i].get("orderId") if i < len(rows) else None)
+                code = codes[i].get("code") if i < len(codes) and isinstance(codes[i], dict) else 0
+                if code not in (0, None):
+                    print(f"  ! batch place L{o.level} @ {o.price} rejected: {code} {codes[i].get('msg')}")
+                placed.append(o)
+        return placed
 
     async def cancel_order(self, market: str, order_id: str) -> None:
         body = {"category": self._category, "symbol": market}
@@ -233,6 +298,11 @@ class BybitExchange:
         if self._session is not None:
             await self._session.close()
             self._session = None
+
+
+def _chunked(items: list, n: int):
+    for i in range(0, len(items), n):
+        yield items[i : i + n]
 
 
 def _unwrap(resp: dict) -> dict:

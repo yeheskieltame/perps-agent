@@ -59,6 +59,13 @@ class SqliteStore:
     def __init__(self, db_path: str = "perpsagent.db") -> None:
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(db_path, check_same_thread=False)
+        # WAL + NORMAL sync: ~10x faster commits than the default rollback journal
+        # while staying crash-durable (only the last txns risk loss on OS/power
+        # crash, not an app crash) — we keep the per-fill commit (persist BEFORE the
+        # paired order). busy_timeout avoids "database is locked" under concurrency.
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute("PRAGMA busy_timeout=5000")
         self._conn.executescript(_SCHEMA)
         try:  # migrate older DBs
             self._conn.execute("ALTER TABLE instances ADD COLUMN regime TEXT")

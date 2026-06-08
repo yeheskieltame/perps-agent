@@ -39,6 +39,21 @@ class NansenSignals:
         self._key = config.get("api_key", "")
         self._base = config.get("base_url", _BASE)
         self._chains = config.get("chains", _DEFAULT_CHAINS)
+        self._session = None  # lazy, reused across calls
+
+    async def _sess(self):
+        if self._session is None:
+            import aiohttp
+
+            self._session = aiohttp.ClientSession(
+                headers={"apiKey": self._key, "Content-Type": "application/json", "accept": "application/json"}
+            )
+        return self._session
+
+    async def close(self) -> None:
+        if self._session is not None:
+            await self._session.close()
+            self._session = None
 
     async def snapshot(self, market: str) -> dict:
         if not self._key:
@@ -53,15 +68,14 @@ class NansenSignals:
         try:
             import aiohttp
 
-            headers = {"apiKey": self._key, "Content-Type": "application/json", "accept": "application/json"}
-            async with aiohttp.ClientSession() as s:
-                async with s.post(
-                    f"{self._base}/api/v1/smart-money/netflow",
-                    headers=headers, json=body, timeout=aiohttp.ClientTimeout(total=12),
-                ) as r:
-                    if r.status != 200:
-                        return {"smart_money_flow": 0.0}
-                    data = await r.json()
+            s = await self._sess()
+            async with s.post(
+                f"{self._base}/api/v1/smart-money/netflow",
+                json=body, timeout=aiohttp.ClientTimeout(total=12),
+            ) as r:
+                if r.status != 200:
+                    return {"smart_money_flow": 0.0}
+                data = await r.json()
             return parse_netflow(data, sym)
         except Exception:
             return {"smart_money_flow": 0.0}

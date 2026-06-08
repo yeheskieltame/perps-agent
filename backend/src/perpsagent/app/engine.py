@@ -71,8 +71,7 @@ class GridEngine:
         self.lower, self.upper = self.cfg.lower, self.cfg.upper
         self.levels = [quantize(p, self.tick) for p in plan_levels(self.cfg)]
         orders = build_grid_orders(self.cfg, self.levels, mid, self._gen)
-        for o in orders:
-            await self._place(o)
+        await self._place_many(orders)
         self.state = GridState.RUNNING
         return orders
 
@@ -87,6 +86,32 @@ class GridEngine:
             await self.ex.place_order(order)
         except Exception as e:  # noqa: BLE001
             print(f"  ! place {order.side.value} L{order.level} @ {order.price} failed: {e}")
+
+    async def _place_many(self, orders: list[Order]) -> None:
+        """Stamp globally-unique external_ids on a whole batch, then place it. Uses
+        the venue's batch endpoint when it exposes one (`place_orders`) — one
+        round-trip per ~20 orders instead of N, which is what lets a re-center keep
+        up under one shared account — else places one-by-one. Tolerant of partial
+        failure: a rejected order is logged, never orphans the grid."""
+        for o in orders:
+            self._oid += 1
+            o.external_id = _external_id(self.cfg.instance_id, o.level, self._oid)
+        batch = getattr(self.ex, "place_orders", None)
+        if batch is None:  # venue has no batch endpoint — place individually
+            for o in orders:
+                if self.state is GridState.HALTED:  # a guard fired mid-place — stop
+                    break
+                try:
+                    await self.ex.place_order(o)
+                except Exception as e:  # noqa: BLE001
+                    print(f"  ! place {o.side.value} L{o.level} @ {o.price} failed: {e}")
+            return
+        if self.state is GridState.HALTED:  # a guard fired — don't place into a halted grid
+            return
+        try:
+            await batch(orders)
+        except Exception as e:  # noqa: BLE001
+            print(f"  ! batch place ({len(orders)} orders) failed: {e}")
 
     # ---- live adaptation: re-center to follow price ----
 
@@ -126,10 +151,7 @@ class GridEngine:
                 orders = [o for o in orders if not (o.side is Side.BUY and o.price > self.pos_avg)]
             elif net < 0:  # short: don't average DOWN (no SELL below the entry)
                 orders = [o for o in orders if not (o.side is Side.SELL and o.price < self.pos_avg)]
-            for o in orders:
-                if self.state is GridState.HALTED:  # a guard fired mid-rebuild — stop placing
-                    break
-                await self._place(o)
+            await self._place_many(orders)
             print(f"  ~ recenter -> mid {new_mid} band [{self.lower}, {self.upper}] gen {self._gen} "
                   f"({len(orders)} orders, net_inv {net})")
         finally:

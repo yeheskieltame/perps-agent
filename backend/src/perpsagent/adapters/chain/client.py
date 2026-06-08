@@ -34,6 +34,7 @@ from ...domain.models import (
     Venue,
 )
 from ...domain.regime import regime_key
+from .nonce import NonceManager
 
 _ABI_DIR = Path(__file__).parent / "abi"
 _PNL_SCALE = 10**6  # realizedPnl stored as fixed-point with 6 decimals on-chain
@@ -67,10 +68,6 @@ def _clip_i32(v: int) -> int:
 def _b32(hexstr: str) -> bytes:
     h = hexstr[2:] if hexstr.startswith("0x") else hexstr
     return bytes.fromhex(h).rjust(32, b"\x00")[:32]
-
-
-def _raw(signed) -> bytes:
-    return getattr(signed, "raw_transaction", None) or signed.rawTransaction
 
 
 class _DetailMirror:
@@ -134,6 +131,9 @@ class MantleChainClient:
             if vault_addr else None
         )
         self.mirror = _DetailMirror(detail_path)
+        # One signer = one nonce lane: serialized, race-free, non-blocking submission.
+        self._nonce = NonceManager(self.w3, self.acct, self.chain_id)
+        self._pending: set[asyncio.Task] = set()
 
     @staticmethod
     def _instance_b32(instance_id: str) -> bytes:
@@ -142,10 +142,14 @@ class MantleChainClient:
     # ---- writes ----
 
     async def commit_strategy(self, instance_id: str, config: GridConfig) -> str:
-        return await self._send(self.ledger.functions.commitStrategy(self._instance_b32(instance_id), config_hash(config)))
+        # Pre-commitment: must be on-chain BEFORE trading → confirmed (awaited).
+        return await self._send_confirmed(
+            self.ledger.functions.commitStrategy(self._instance_b32(instance_id), config_hash(config))
+        )
 
     async def attest(self, instance_id: str, outcome: EpisodeOutcome) -> str:
-        return await self._send(
+        # Post-trade write → fire-then-confirm (don't block the close path on a block).
+        return await self._send_async(
             self.ledger.functions.attest(
                 self._instance_b32(instance_id),
                 int(outcome.realized_pnl * _PNL_SCALE),
@@ -158,7 +162,7 @@ class MantleChainClient:
     async def write_memory(self, record: MemoryRecord) -> str:
         ch = config_hash(record.config)
         self.mirror.put(ch.hex(), record.config, record.regime)
-        return await self._send(
+        return await self._send_async(
             self.memory.functions.write(
                 _b32(regime_key(record.regime)),
                 ch,
@@ -205,7 +209,7 @@ class MantleChainClient:
 
     async def settle_fee(self, user: str, asset: str, amount: int) -> str:
         assert self.vault is not None, "vault address not configured"
-        return await self._send(
+        return await self._send_confirmed(  # money movement → confirmed
             self.vault.functions.settleFee(Web3.to_checksum_address(user), Web3.to_checksum_address(asset), int(amount))
         )
 
@@ -215,23 +219,32 @@ class MantleChainClient:
             lambda: self.vault.functions.balanceOf(Web3.to_checksum_address(user), Web3.to_checksum_address(asset)).call()
         )
 
-    # ---- tx plumbing ----
+    # ---- tx plumbing (nonce-managed; see adapters/chain/nonce.py) ----
 
-    async def _send(self, fn) -> str:
-        return await asyncio.to_thread(self._send_sync, fn)
+    async def _send_confirmed(self, fn) -> str:
+        """Submit AND wait for the receipt — for txs that must be on-chain before we
+        proceed (pre-commitment, fee settlement)."""
+        tx_hash = await self._nonce.submit(fn)
+        await self._nonce.confirm(tx_hash)
+        return tx_hash
 
-    def _send_sync(self, fn) -> str:
-        tx = fn.build_transaction(
-            {
-                "from": self.acct.address,
-                "nonce": self.w3.eth.get_transaction_count(self.acct.address, "pending"),
-                "chainId": self.chain_id,
-                "gasPrice": self.w3.eth.gas_price,
-            }
-        )
-        signed = self.acct.sign_transaction(tx)
-        h = self.w3.eth.send_raw_transaction(_raw(signed))
-        rcpt = self.w3.eth.wait_for_transaction_receipt(h, timeout=120)
-        if rcpt["status"] != 1:
-            raise RuntimeError(f"tx reverted: {h.hex()}")
-        return h.hex()
+    async def _send_async(self, fn) -> str:
+        """Submit and return the hash immediately; confirm in the background
+        (fire-then-confirm). For post-trade writes (attest / memory) that must not
+        block the close path on a Mantle block — a revert is logged, not raised."""
+        tx_hash = await self._nonce.submit(fn)
+        task = asyncio.create_task(self._confirm_and_log(tx_hash))
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
+        return tx_hash
+
+    async def _confirm_and_log(self, tx_hash: str) -> None:
+        try:
+            await self._nonce.confirm(tx_hash)
+        except Exception as e:  # noqa: BLE001 — background confirm must never crash the loop
+            print(f"  ! on-chain confirm failed {tx_hash}: {e}")
+
+    async def drain(self) -> None:
+        """Await all in-flight background confirmations (call on graceful shutdown)."""
+        if self._pending:
+            await asyncio.gather(*list(self._pending), return_exceptions=True)

@@ -17,6 +17,7 @@ import hashlib
 import hmac
 import json
 import time
+from collections import OrderedDict
 from decimal import Decimal
 from typing import Any, AsyncIterator, Sequence
 
@@ -56,6 +57,11 @@ class BybitExchange:
         self._max_retries = int(config.get("max_retries", 3))
         self._retry_base = float(config.get("retry_base", 0.5))   # backoff seconds
         self._retry_cap = float(config.get("retry_cap", 8.0))
+        # Fill-stream gap recovery: watermark of the newest execTime yielded (ms)
+        # + a bounded execId memory so REST backfill and WS redelivery never
+        # double-count a fill.
+        self._last_exec_ms = 0
+        self._seen_execs: OrderedDict[str, None] = OrderedDict()
 
     async def _sess(self):
         if self._session is None:
@@ -201,6 +207,23 @@ class BybitExchange:
         body["orderLinkId" if order_id.startswith("grid-") else "orderId"] = order_id
         await self._post("/v5/order/cancel", body)
 
+    async def cancel_orders(self, market: str, orders: Sequence[Order]) -> None:
+        """Batch-cancel up to 20 orders per request (/v5/order/cancel-batch) — the
+        cancel half of an instance-scoped re-center in 1-2 round-trips. Partial
+        failures (e.g. an order that just filled) are logged, never fatal."""
+        for chunk in _chunked(list(orders), _BATCH_MAX):
+            body = {"category": self._category,
+                    "request": [{"symbol": market, "orderLinkId": o.external_id} for o in chunk]}
+            resp = await self._request("POST", "/v5/order/cancel-batch", json.dumps(body, separators=(",", ":")))
+            if int(resp.get("retCode", 0) or 0) != 0:  # whole batch rejected
+                print(f"  ! batch cancel failed: {resp.get('retCode')} {resp.get('retMsg')}")
+                continue
+            codes = (resp.get("retExtInfo") or {}).get("list") or []
+            for i, o in enumerate(chunk):
+                code = codes[i].get("code") if i < len(codes) and isinstance(codes[i], dict) else 0
+                if code not in (0, None):
+                    print(f"  ! batch cancel {o.external_id} rejected: {code} {codes[i].get('msg')}")
+
     async def cancel_all(self, market: str) -> None:
         await self._post("/v5/order/cancel-all", {"category": self._category, "symbol": market})
 
@@ -261,8 +284,11 @@ class BybitExchange:
         return out
 
     async def stream_fills(self) -> AsyncIterator[Fill]:
-        """Private WS `execution` stream → Fill. Reconnects with exponential backoff.
-        Reconcile open orders/positions from REST after each (re)connect."""
+        """Private WS `execution` stream → Fill. Reconnects with exponential
+        backoff; after every reconnect, executions that happened while the socket
+        was down are backfilled from REST (/v5/execution/list) and deduped by
+        execId — a WS gap never loses a fill, so engine inventory/PnL (and the
+        circuit breaker reading them) stay true to the venue."""
         import aiohttp
 
         backoff = 1
@@ -273,6 +299,8 @@ class BybitExchange:
                     await self._ws_auth(ws)
                     await ws.send_json({"op": "subscribe", "args": ["execution"]})
                     backoff = 1
+                    for fill in await self._backfill():
+                        yield fill
                     async for msg in ws:
                         if msg.type is not aiohttp.WSMsgType.TEXT:
                             continue
@@ -280,14 +308,74 @@ class BybitExchange:
                         if data.get("topic") != "execution":
                             continue
                         for e in data.get("data", []):
+                            if self._dedup(e.get("execId", "")):
+                                continue
                             fill = _to_fill(e)
                             if fill is not None:
+                                self._last_exec_ms = max(self._last_exec_ms, fill.ts)
                                 yield fill
             except asyncio.CancelledError:
                 raise
             except Exception:
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30)
+
+    def _dedup(self, exec_id: str) -> bool:
+        """True if this execId was already yielded (WS redelivery or the overlap
+        between live stream and REST backfill). Bounded memory: ~4096 newest ids."""
+        if not exec_id:
+            return False
+        if exec_id in self._seen_execs:
+            return True
+        self._seen_execs[exec_id] = None
+        if len(self._seen_execs) > 4096:
+            self._seen_execs.popitem(last=False)
+        return False
+
+    async def _backfill(self) -> list[Fill]:
+        """Fills missed while the WS was down. First connect: nothing to recover,
+        just start the watermark. A backfill failure is logged — it must not tear
+        down the connection that was just re-established."""
+        if self._last_exec_ms == 0:
+            self._last_exec_ms = int(time.time() * 1000)
+            return []
+        try:
+            # 5s overlap absorbs local↔server clock skew; _dedup eats the overlap.
+            missed = await self._missed_fills(max(1, self._last_exec_ms - 5_000))
+        except Exception as e:  # noqa: BLE001
+            print(f"  ! fill backfill failed: {e}")
+            return []
+        for f in missed:
+            self._last_exec_ms = max(self._last_exec_ms, f.ts)
+        if missed:
+            print(f"  ~ backfilled {len(missed)} fill(s) missed during a WS gap")
+        return missed
+
+    async def _missed_fills(self, since_ms: int) -> list[Fill]:
+        """Executions since `since_ms`, oldest-first. /v5/execution/list returns
+        newest-first, so a full page (100) means older rows remain — page strictly
+        backwards by endTime until the window is covered. Deduped by execId."""
+        out: list[Fill] = []
+        end_ms = 0  # 0 = open-ended (now)
+        while True:
+            params: dict[str, Any] = {"category": self._category, "startTime": since_ms, "limit": 100}
+            if end_ms:
+                params["endTime"] = end_ms
+            res = await self._get("/v5/execution/list", params)
+            rows = res.get("list") or []
+            for e in rows:
+                if self._dedup(e.get("execId", "")):
+                    continue
+                fill = _to_fill(e)
+                if fill is not None:
+                    out.append(fill)
+            if len(rows) < 100:
+                break
+            end_ms = min(int(r.get("execTime") or 0) for r in rows) - 1
+            if end_ms <= since_ms:
+                break
+        out.sort(key=lambda f: f.ts)
+        return out
 
     async def _ws_auth(self, ws) -> None:
         expires = int((time.time() + 10) * 1000)

@@ -9,6 +9,10 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="PERPSAGENT_", env_file=".env", extra="ignore")
 
     env: str = "testnet"  # testnet | mainnet
+    # Trade real money on Bybit (env=mainnet) while keeping on-chain proofs on a
+    # free testnet chain. Explicit opt-in so the mainnet label never *silently*
+    # implies testnet proofs. Only valid when env=mainnet.
+    proofs_on_testnet: bool = False
 
     # Bybit (user-supplied keys; never commit)
     bybit_api_key: str = ""
@@ -66,7 +70,22 @@ class Settings(BaseSettings):
         if self.env == "mainnet":
             if self.bybit_testnet:
                 raise ValueError("env=mainnet but bybit_testnet=True")
-            if self.mantle_rpc and looks_testnet:
-                raise ValueError("env=mainnet but Mantle RPC looks like testnet")
-        elif self.mantle_rpc and not looks_testnet:
-            raise ValueError("env=testnet but Mantle RPC does not look like testnet")
+            if self.proofs_on_testnet:
+                if self.mantle_rpc and not looks_testnet:
+                    raise ValueError("proofs_on_testnet=True but Mantle RPC is not a testnet")
+            elif self.mantle_rpc and looks_testnet:
+                raise ValueError(
+                    "env=mainnet but Mantle RPC looks like testnet — set "
+                    "PERPSAGENT_PROOFS_ON_TESTNET=true to keep proofs on a free testnet "
+                    "chain while trading real money on Bybit"
+                )
+        else:
+            if self.proofs_on_testnet:
+                raise ValueError("proofs_on_testnet only applies when env=mainnet")
+            if not self.bybit_testnet:
+                raise ValueError(
+                    "env=testnet but bybit_testnet=False — that is real Bybit money "
+                    "under a testnet label; set PERPSAGENT_ENV=mainnet explicitly to trade live"
+                )
+            if self.mantle_rpc and not looks_testnet:
+                raise ValueError("env=testnet but Mantle RPC does not look like testnet")

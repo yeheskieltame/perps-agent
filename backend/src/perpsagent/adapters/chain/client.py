@@ -229,7 +229,11 @@ class MantleChainClient:
         """Submit AND wait for the receipt — for txs that must be on-chain before we
         proceed (pre-commitment, fee settlement)."""
         tx_hash = await self._nonce.submit(fn)
-        await self._nonce.confirm(tx_hash)
+        try:
+            await self._nonce.confirm(tx_hash)
+        except Exception:
+            await self._resync_nonce()  # a dropped tx must not strand the nonce lane
+            raise
         return tx_hash
 
     async def _send_async(self, fn) -> str:
@@ -247,6 +251,16 @@ class MantleChainClient:
             await self._nonce.confirm(tx_hash)
         except Exception as e:  # noqa: BLE001 — background confirm must never crash the loop
             print(f"  ! on-chain confirm failed {tx_hash}: {e}")
+            await self._resync_nonce()
+
+    async def _resync_nonce(self) -> None:
+        """Re-seed the nonce after a failed/timed-out confirm: a tx dropped from
+        the mempool leaves the local counter ahead of the chain, which would
+        queue every later tx behind a ghost nonce forever."""
+        try:
+            await self._nonce.resync()
+        except Exception as e:  # noqa: BLE001 — best-effort; next submit may still work
+            print(f"  ! nonce resync failed: {e}")
 
     async def drain(self) -> None:
         """Await all in-flight background confirmations (call on graceful shutdown)."""

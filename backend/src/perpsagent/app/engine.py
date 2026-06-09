@@ -26,6 +26,8 @@ from .safety import CircuitBreaker, ProfitGuard
 
 
 class GridEngine:
+    _exit_retry_delay = 1.0  # backoff base for emergency-exit retries (tests set 0)
+
     def __init__(self, exchange, cfg: GridConfig, store=None, breaker: CircuitBreaker | None = None,
                  monitor_interval: float = 0.0, profit_guard: ProfitGuard | None = None) -> None:
         self.ex = exchange
@@ -138,7 +140,7 @@ class GridEngine:
         generation namespaces the new external_ids so they never collide."""
         self.state = GridState.REBALANCING
         try:
-            await self.ex.cancel_all(self.cfg.market)
+            await self._cancel_own()
             self.center = new_mid
             self.lower = new_mid * self._lower_ratio
             self.upper = new_mid * self._upper_ratio
@@ -157,6 +159,31 @@ class GridEngine:
         finally:
             if self.state is GridState.REBALANCING:  # ALWAYS leave a runnable state (never orphan)
                 self.state = GridState.RUNNING
+
+    async def _cancel_own(self) -> None:
+        """Cancel only THIS instance's resting orders, so two grids sharing one
+        market+account never wipe each other on a re-center or stop. (Emergency
+        `_exit` still nukes the whole market on purpose — flatten closes the
+        shared net position anyway.) Falls back to market-wide cancel_all when
+        the venue cannot enumerate open orders."""
+        try:
+            resting = await self.ex.open_orders(self.cfg.market)
+        except Exception as e:  # noqa: BLE001
+            print(f"  ! open_orders failed ({e}) — falling back to cancel_all")
+            await self.ex.cancel_all(self.cfg.market)
+            return
+        mine = [o for o in resting if o.instance_id == self.cfg.instance_id]
+        if not mine:
+            return
+        batch = getattr(self.ex, "cancel_orders", None)
+        if batch is not None:  # venue batch endpoint: 1-2 round-trips for the lot
+            await batch(self.cfg.market, mine)
+            return
+        for o in mine:
+            try:
+                await self.ex.cancel_order(self.cfg.market, o.order_id or o.external_id)
+            except Exception as e:  # noqa: BLE001 — an order that just filled is fine
+                print(f"  ! cancel {o.external_id} failed: {e}")
 
     async def monitor(self) -> None:
         """Background loop: re-center on band-exit and enforce guards until stop."""
@@ -205,14 +232,25 @@ class GridEngine:
         self.exit_reason = reason
         self.exit_kind = kind
         print(f"  !! {kind}: {reason} — cancel_all + flatten")
-        try:
-            await self.ex.cancel_all(self.cfg.market)
-        except Exception as e:  # noqa: BLE001
-            print(f"    cancel_all failed: {e}")
-        try:
-            await self.ex.flatten(self.cfg.market)
-        except Exception as e:  # noqa: BLE001
-            print(f"    flatten failed: {e}")
+        await self._retry_exit_step("cancel_all", self.ex.cancel_all)
+        await self._retry_exit_step("flatten", self.ex.flatten)
+
+    async def _retry_exit_step(self, what: str, op, attempts: int = 3) -> None:
+        """An exit step MUST land: once HALTED the monitor stops, so a tripped
+        breaker with a live position is unsupervised risk. Retry with backoff;
+        shout if the venue still refuses — that needs a human."""
+        delay = self._exit_retry_delay
+        for attempt in range(1, attempts + 1):
+            try:
+                await op(self.cfg.market)
+                return
+            except Exception as e:  # noqa: BLE001
+                print(f"    {what} failed (attempt {attempt}/{attempts}): {e}")
+                if attempt < attempts:
+                    await asyncio.sleep(delay)
+                    delay *= 2
+        print(f"  !!! {what} did not land after {attempts} attempts — "
+              f"POSITION MAY STILL BE OPEN on {self.cfg.market}; close it manually")
 
     async def handle_fill(self, fill: Fill) -> Order | None:
         if fill.instance_id != self.cfg.instance_id:
@@ -281,7 +319,7 @@ class GridEngine:
 
     async def stop(self) -> None:
         self.state = GridState.EXITING
-        await self.ex.cancel_all(self.cfg.market)
+        await self._cancel_own()  # instance-scoped: never wipes a sibling grid
         self.state = GridState.HALTED
 
     @property

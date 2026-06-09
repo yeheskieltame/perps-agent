@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import signal
 from decimal import Decimal
 
 from .agent.decide import ContextualPolicy
@@ -121,15 +122,26 @@ async def run(mode: str, market: str, venue_choice: str, leverage: Decimal = Dec
         print(f"[dry] episode done: fills={out.fill_count} winrate={out.winrate:.0%} "
               f"pnl={out.realized_pnl} riskAdj={out.risk_adjusted:.4f}")
     else:
-        print(f"[live] running on {venue.value} — Ctrl-C to stop")
+        print(f"[live] running on {venue.value} — Ctrl-C or SIGTERM to stop")
+        # Explicit handlers, not bare KeyboardInterrupt: a process launched in the
+        # background (nohup/&, systemd, docker) inherits SIGINT=ignore and gets
+        # SIGTERM on shutdown — both must still run the graceful close path.
+        stop = asyncio.Event()
+        runtime = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                runtime.add_signal_handler(sig, stop.set)
+            except (NotImplementedError, ValueError):  # non-unix / non-main thread
+                pass
         try:
-            await asyncio.Event().wait()
+            await stop.wait()
         except (KeyboardInterrupt, asyncio.CancelledError):
-            print("[live] closing gracefully — cancel orders → attest → write memory. JANGAN Ctrl-C lagi…")
-            out = await asyncio.shield(loop.close_and_learn(iid))
-            if hasattr(loop.chain, "drain"):  # let fire-then-confirm attest/memory land
-                await asyncio.shield(loop.chain.drain())
-            print(f"[live] episode attested: fills={out.fill_count} winrate={out.winrate:.0%} pnl={out.realized_pnl}")
+            pass  # fallback when no signal handler could be installed
+        print("[live] closing gracefully — cancel orders → attest → write memory. JANGAN Ctrl-C lagi…")
+        out = await asyncio.shield(loop.close_and_learn(iid))
+        if hasattr(loop.chain, "drain"):  # let fire-then-confirm attest/memory land
+            await asyncio.shield(loop.chain.drain())
+        print(f"[live] episode attested: fills={out.fill_count} winrate={out.winrate:.0%} pnl={out.realized_pnl}")
 
 
 def main() -> None:

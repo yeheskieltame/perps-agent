@@ -177,6 +177,62 @@ async def test_recenter_survives_place_failure_without_orphaning():
     assert await ex.open_orders("BTCUSDT")    # the rest of the grid still got placed
 
 
+async def test_recenter_cancels_only_own_orders_on_shared_market():
+    """Two grids share one market+account: re-centering A must not wipe B."""
+    ex = FakeExchange({"mid": "100", "tick": "0.1"})
+    a = GridEngine(ex, _cfg(instance_id="a"))
+    b = GridEngine(ex, _cfg(instance_id="b"))
+    await a.start()
+    await b.start()
+    b_before = {o.external_id for o in await ex.open_orders("BTCUSDT") if o.instance_id == "b"}
+    assert b_before
+    await a._recenter(Decimal("100.5"))
+    after = await ex.open_orders("BTCUSDT")
+    assert {o.external_id for o in after if o.instance_id == "b"} == b_before  # B untouched
+    assert [o for o in after if o.instance_id == "a"]                          # A re-laid
+
+
+async def test_stop_cancels_only_own_orders_on_shared_market():
+    ex = FakeExchange({"mid": "100", "tick": "0.1"})
+    a = GridEngine(ex, _cfg(instance_id="a"))
+    b = GridEngine(ex, _cfg(instance_id="b"))
+    await a.start()
+    await b.start()
+    await a.stop()
+    left = await ex.open_orders("BTCUSDT")
+    assert [o for o in left if o.instance_id == "a"] == []  # A fully cancelled
+    assert [o for o in left if o.instance_id == "b"]        # B keeps trading
+
+
+class _FlakyExitFake(FakeExchange):
+    """flatten fails twice then succeeds — the venue hiccuping mid-emergency."""
+
+    def __init__(self, cfg=None):
+        super().__init__(cfg)
+        self.flatten_attempts = 0
+
+    async def flatten(self, market):
+        self.flatten_attempts += 1
+        if self.flatten_attempts < 3:
+            raise RuntimeError("bybit error 10006: too many visits")
+        await super().flatten(market)
+
+
+async def test_exit_retries_flatten_until_it_lands():
+    """A tripped breaker with a live position is unsupervised risk — the exit
+    steps must retry through transient venue errors, not log-and-give-up."""
+    ex = _FlakyExitFake({"mid": "100", "tick": "0.1"})
+    eng = GridEngine(ex, _cfg(), breaker=CircuitBreaker(max_inventory=Decimal("0.01")))
+    eng._exit_retry_delay = 0  # no real backoff sleeps in tests
+    await eng.start()
+    await eng.handle_fill(Fill(instance_id="t-1", market="BTCUSDT", side=Side.BUY,
+                               price=Decimal("99"), qty=Decimal("0.02"),
+                               external_id="grid-t-1-L0-0", ts=0, level=0))
+    assert eng.state is GridState.HALTED
+    assert ex.flatten_attempts == 3           # retried through the hiccup
+    assert "BTCUSDT" in ex.flatten_calls      # and the position actually closed
+
+
 async def test_signed_position_tracks_short_from_flat():
     ex = FakeExchange({"mid": "100", "tick": "0.1"})
     eng = GridEngine(ex, _cfg())

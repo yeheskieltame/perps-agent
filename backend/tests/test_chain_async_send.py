@@ -68,6 +68,34 @@ async def test_attest_is_fire_then_confirm(tmp_path):
     assert "0xtx1" in client._nonce.confirmed
 
 
+class _DroppedTxNonce(_RecordingNonce):
+    """confirm always times out (tx dropped from the mempool)."""
+
+    def __init__(self):
+        super().__init__()
+        self.resyncs = 0
+
+    async def confirm(self, tx_hash, timeout=120):
+        raise RuntimeError(f"tx dropped: {tx_hash}")
+
+    async def resync(self):
+        self.resyncs += 1
+
+
+@pytest.mark.asyncio
+async def test_confirm_failure_resyncs_nonce_on_both_paths(tmp_path):
+    """A dropped tx leaves the local nonce counter ahead of the chain; without a
+    resync every later tx queues behind a ghost nonce forever."""
+    client = _client(tmp_path)
+    client._nonce = _DroppedTxNonce()
+    with pytest.raises(RuntimeError):                 # confirmed path re-raises…
+        await client.commit_strategy("i1", _cfg())
+    assert client._nonce.resyncs == 1                 # …after re-seeding the lane
+    await client.attest("i1", _outcome())             # fire-then-confirm path
+    await client.drain()
+    assert client._nonce.resyncs == 2                 # background failure also resyncs
+
+
 @pytest.mark.asyncio
 async def test_write_memory_fire_then_confirm_and_mirrors(tmp_path):
     client = _client(tmp_path)

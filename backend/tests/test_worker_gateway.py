@@ -55,6 +55,36 @@ async def test_worker_rejects_off_shard_user():
 
 
 @pytest.mark.asyncio
+async def test_worker_market_info():
+    c = await _client(build_worker_app(_svc(), "0"))
+    try:
+        m = await (await c.get("/v1/market/BTCUSDT", headers={"X-User-Id": "7"})).json()
+        assert m == {"market": "BTCUSDT", "bid": "99.9", "ask": "100.1", "mid": "100.0"}
+    finally:
+        await c.close()
+
+
+@pytest.mark.asyncio
+async def test_worker_create_from_band_shorthand():
+    """A UI may send {band} instead of lower/upper — the worker resolves bounds
+    from the user's live top-of-book (mid 100 ± 1% -> [99, 101])."""
+    c = await _client(build_worker_app(_svc(), "0"))
+    try:
+        r = await c.post("/v1/grids", headers={"X-User-Id": "7"},
+                         json={"market": "BTCUSDT", "band": "0.01", "levels": 11,
+                               "order_size": "0.01", "venue": "fake"})
+        assert r.status == 200
+        st = await (await c.get("/v1/status", headers={"X-User-Id": "7"})).json()
+        assert len(st) == 1 and st[0]["state"] == "RUNNING"
+
+        bad = await c.post("/v1/grids", headers={"X-User-Id": "7"},
+                           json={"market": "BTCUSDT", "band": "1.5", "levels": 11})
+        assert bad.status == 400   # band must be a fraction in (0, 1)
+    finally:
+        await c.close()
+
+
+@pytest.mark.asyncio
 async def test_worker_requires_user_header():
     c = await _client(build_worker_app(_svc(), "0"))
     try:

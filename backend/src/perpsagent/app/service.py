@@ -26,12 +26,21 @@ class GridStatusView:
     fill_count: int
 
 
+@dataclass
+class MarketView:
+    market: str
+    bid: str
+    ask: str
+    mid: str
+
+
 class GridService(Protocol):
     async def create_grid(self, user_id: int, cfg: GridConfig) -> str: ...
     async def stop_grid(self, user_id: int, instance_id: str) -> None: ...
     async def pause_grid(self, user_id: int, instance_id: str) -> None: ...
     async def status(self, user_id: int) -> Sequence[GridStatus]: ...
     async def balance(self, user_id: int) -> BalanceView: ...
+    async def market_info(self, user_id: int, market: str) -> MarketView: ...
 
 
 class AppService:
@@ -106,6 +115,13 @@ class AppService:
     async def balance(self, user_id: int) -> BalanceView:
         session = await self._session(user_id)
         return await session.exchange.balance()
+
+    async def market_info(self, user_id: int, market: str) -> MarketView:
+        """Live top-of-book through the user's own venue client — lets a UI turn
+        'band ±1%' into absolute grid bounds without importing any exchange SDK."""
+        session = await self._session(user_id)
+        bid, ask = await session.exchange.best_bid_ask(market)
+        return MarketView(market=market, bid=str(bid), ask=str(ask), mid=str((bid + ask) / 2))
 
     async def disconnect(self, user_id: int) -> None:
         """Tear down a user's session (stop the consumer, close the client)."""

@@ -36,7 +36,7 @@ forge script script/Deploy.s.sol:Deploy \
 cd backend
 python3.11 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev,bybit]"
-pytest                                          # 92 tests (+2 PG when a DSN is set)
+pytest                                          # full suite (+PG tests when a DSN is set)
 python -m perpsagent.runner --mode dry          # full loop on fakes, no keys
 ```
 

@@ -172,6 +172,16 @@ class GridEngine:
             self._gen += 1
             orders = build_grid_orders(self.cfg, self.levels, new_mid, self._gen, bias=self.bias)
             net = self.net_inventory()
+            if self.bias != 0 and net != 0 and (net > 0) == (self.bias > 0):
+                # Trend mode holds with-trend inventory: re-arm its take-profit
+                # reducers. The bias only blocks OPENING against the trend — it must
+                # never leave a held position without resting exits (a biased ladder
+                # at the cap would otherwise re-lay ZERO orders).
+                reduce_side = Side.SELL if net > 0 else Side.BUY
+                full = build_grid_orders(self.cfg, self.levels, new_mid, self._gen)
+                reducers = [o for o in full if o.side is reduce_side]
+                reducers.sort(key=lambda o: o.price, reverse=(reduce_side is Side.BUY))
+                orders += reducers[:int(abs(net) / self.cfg.order_size)]
             if net > 0:    # long: don't average UP (no BUY above the entry)
                 orders = [o for o in orders if not (o.side is Side.BUY and o.price > self.pos_avg)]
             elif net < 0:  # short: don't average DOWN (no SELL below the entry)

@@ -151,6 +151,24 @@ async def test_bias_fn_morphs_grid_on_recenter():
     assert after and all(o.side is Side.BUY for o in after)   # morphed to trend grid
 
 
+async def test_trend_mode_recenter_at_cap_rearms_take_profits():
+    """A long-bias grid at the inventory cap must NOT re-lay an empty book: the
+    buy side is thinned (cap) but the held position's take-profit sells must be
+    re-armed — bias blocks opening against the trend, never closing."""
+    ex = FakeExchange({"mid": "100", "tick": "0.1"})
+    breaker = CircuitBreaker(max_inventory=Decimal("0.03"))
+    eng = GridEngine(ex, _cfg(bias=1), breaker=breaker)
+    await eng.start()
+    eng.pos_qty = Decimal("0.03")           # long at the cap
+    eng.pos_avg = Decimal("99")
+    await ex.move_price("BTCUSDT", Decimal("95"))    # dip exits the band
+    assert await eng.maybe_recenter() is True
+    mine = [o for o in await ex.open_orders("BTCUSDT") if o.instance_id == "t-1"]
+    sells = [o for o in mine if o.side is Side.SELL]
+    assert len(sells) == 3                  # one TP per held lot
+    assert all(o.side is Side.SELL for o in mine)    # and no cap-busting buys
+
+
 # ---- engine: re-center can never re-arm the side that breaches the cap (#34) ----
 
 async def test_recenter_at_cap_does_not_rearm_offending_side():

@@ -131,6 +131,38 @@ async def test_recenter_at_cap_does_not_rearm_offending_side():
     assert after and all(o.side is Side.BUY for o in after)   # only reducers re-armed
 
 
+async def test_paired_rebuy_respects_placement_time_cap():
+    """Issue #36: the cap is a placement-time budget. A paired re-buy must be
+    skipped when position + the RESTING buy ladder + this order could sweep past
+    the cap in one fast move (the exact mainnet incident shape)."""
+    ex = FakeExchange({"mid": "100", "tick": "0.1"})
+    breaker = CircuitBreaker(max_inventory=Decimal("0.03"))
+    eng = GridEngine(ex, _cfg(), breaker=breaker)
+    await eng.start()                                   # ~5 buys resting below mid
+    eng.pos_qty = Decimal("0.02")
+    eng.pos_avg = Decimal("100")
+    from perpsagent.domain.models import Fill
+    paired = await eng.handle_fill(Fill(
+        instance_id="t-1", market="BTCUSDT", side=Side.SELL,
+        price=Decimal("100.6"), qty=Decimal("0.01"),
+        external_id="grid-t-1-L8-0", ts=0, level=8))
+    assert paired is None                               # skipped, not placed
+    assert not breaker.tripped
+
+
+async def test_paired_rebuy_places_when_cap_has_room():
+    ex = FakeExchange({"mid": "100", "tick": "0.1"})
+    breaker = CircuitBreaker(max_inventory=Decimal("1"))   # ample room
+    eng = GridEngine(ex, _cfg(), breaker=breaker)
+    await eng.start()
+    from perpsagent.domain.models import Fill
+    paired = await eng.handle_fill(Fill(
+        instance_id="t-1", market="BTCUSDT", side=Side.SELL,
+        price=Decimal("100.6"), qty=Decimal("0.01"),
+        external_id="grid-t-1-L8-0", ts=0, level=8))
+    assert paired is not None and paired.side is Side.BUY
+
+
 async def test_recenter_near_cap_thins_to_remaining_room():
     ex = FakeExchange({"mid": "100", "tick": "0.1"})
     breaker = CircuitBreaker(max_inventory=Decimal("0.03"))

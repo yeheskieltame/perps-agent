@@ -53,6 +53,11 @@ class GridEngine:
         self._nonce = 0
         self._oid = 0  # global monotonic order-id counter — every order id is unique forever
         self._fills: list[Fill] = []
+        # Resting orders THIS engine placed (issue #36): the inventory cap must hold
+        # at placement time too — a fast sweep through every resting order may not
+        # take |position| past the cap. Overcounts on partial fills/rejects, which
+        # only errs toward placing less (safe).
+        self._resting: dict[str, Order] = {}
         # re-center state (live band; cfg stays the committed/original band)
         self._gen = 0
         self.tick = Decimal(0)
@@ -92,6 +97,7 @@ class GridEngine:
         order.external_id = _external_id(self.cfg.instance_id, order.level, self._oid)
         try:
             await self.ex.place_order(order)
+            self._resting[order.external_id] = order
         except Exception as e:  # noqa: BLE001
             print(f"  ! place {order.side.value} L{order.level} @ {order.price} failed: {e}")
 
@@ -111,6 +117,7 @@ class GridEngine:
                     break
                 try:
                     await self.ex.place_order(o)
+                    self._resting[o.external_id] = o
                 except Exception as e:  # noqa: BLE001
                     print(f"  ! place {o.side.value} L{o.level} @ {o.price} failed: {e}")
             return
@@ -118,6 +125,8 @@ class GridEngine:
             return
         try:
             await batch(orders)
+            for o in orders:
+                self._resting[o.external_id] = o
         except Exception as e:  # noqa: BLE001
             print(f"  ! batch place ({len(orders)} orders) failed: {e}")
 
@@ -201,6 +210,7 @@ class GridEngine:
         `_exit` still nukes the whole market on purpose — flatten closes the
         shared net position anyway.) Falls back to market-wide cancel_all when
         the venue cannot enumerate open orders."""
+        self._resting.clear()  # everything of ours is being cancelled below
         try:
             resting = await self.ex.open_orders(self.cfg.market)
         except Exception as e:  # noqa: BLE001
@@ -266,6 +276,7 @@ class GridEngine:
         self.state = GridState.HALTED
         self.exit_reason = reason
         self.exit_kind = kind
+        self._resting.clear()
         print(f"  !! {kind}: {reason} — cancel_all + flatten")
         await self._retry_exit_step("cancel_all", self.ex.cancel_all)
         await self._retry_exit_step("flatten", self.ex.flatten)
@@ -294,15 +305,34 @@ class GridEngine:
             await self.store.record_fill(fill)  # persist BEFORE placing the pair
         self._fills.append(fill)
         self.fill_count += 1
+        self._resting.pop(fill.external_id, None)
         self._apply_fill(fill.side, fill.price, fill.qty)
         await self._check_guards(fill.price)  # risk + profit guards before placing more orders
         if self.state is not GridState.RUNNING:
             return None
         self._nonce += 1
         paired = compute_paired_order(self.cfg, self.levels, fill.level, fill.side, self._nonce)
+        if paired is not None and not self._fits_cap(paired):
+            print(f"  ~ skipped paired {paired.side.value} L{paired.level}: "
+                  f"resting ladder would exceed inventory cap")
+            return None
         if paired is not None:
             await self._place(paired)
         return paired
+
+    def _fits_cap(self, order: Order) -> bool:
+        """Placement-time cap budget (issue #36): would |position| stay within the
+        breaker cap even if EVERY resting inventory-increasing order — plus this
+        one — filled in a single sweep? Reducing orders always fit."""
+        cap = self.breaker.max_inventory if self.breaker is not None else Decimal(0)
+        if cap <= 0:
+            return True
+        pos = self.pos_qty
+        growing = Side.BUY if pos >= 0 else Side.SELL
+        if order.side is not growing:
+            return True
+        resting_growth = sum(o.qty for o in self._resting.values() if o.side is growing)
+        return abs(pos) + resting_growth + order.qty <= cap
 
     def _apply_fill(self, side: Side, price: Decimal, qty: Decimal) -> None:
         """Signed-position accounting (mirrors a perp account): average in when a

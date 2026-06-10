@@ -12,10 +12,12 @@ these with distinct `PERPSAGENT_SHARD_NODE` behind `app/gateway.py`.
 API (user identified by the `X-User-Id` header):
   GET    /healthz
   POST   /v1/grids                {market, lower, upper, levels, order_size, ...} -> {instance_id}
+                                  (or {market, band, levels, ...} — bounds = mid*(1±band))
   DELETE /v1/grids/{instance_id}
   POST   /v1/grids/{instance_id}/pause
   GET    /v1/status               -> [{instance_id, state, realized_pnl, fill_count}]
   GET    /v1/balance              -> {equity, available, currency}
+  GET    /v1/market/{market}      -> {market, bid, ask, mid}
 
 A request for a user this shard does not own returns 409 (the gateway should never
 send one — this is defense-in-depth). SKETCH: no auth on X-User-Id, and grids run
@@ -68,7 +70,23 @@ def build_worker_app(service: AppService, node: str) -> web.Application:
 
     async def create(request: web.Request) -> web.Response:
         user_id = _user_id(request)
-        cfg = _cfg_from_body(await request.json(), node)
+        body = await request.json()
+        # Band shorthand: a UI may send {band: 0.01} instead of absolute bounds —
+        # the worker resolves them from the user's own live top-of-book, so the
+        # UI never needs an exchange SDK (the GridService seam stays the boundary).
+        if "band" in body and not ("lower" in body or "upper" in body):
+            try:
+                band = Decimal(str(body["band"]))
+                if not Decimal(0) < band < Decimal(1):
+                    raise ValueError("band must be a fraction in (0, 1)")
+                m = await service.market_info(user_id, body["market"])
+            except (KeyError, ValueError, ArithmeticError) as e:
+                raise web.HTTPBadRequest(reason=f"bad grid config: {e}") from None
+            except PermissionError as e:
+                raise web.HTTPConflict(reason=str(e)) from None
+            mid = Decimal(m.mid)
+            body["lower"], body["upper"] = str(mid * (1 - band)), str(mid * (1 + band))
+        cfg = _cfg_from_body(body, node)
         try:
             iid = await service.create_grid(user_id, cfg)
         except PermissionError as e:
@@ -104,12 +122,20 @@ def build_worker_app(service: AppService, node: str) -> web.Application:
             raise web.HTTPConflict(reason=str(e)) from None
         return web.json_response({"equity": str(b.equity), "available": str(b.available), "currency": b.currency})
 
+    async def market(request: web.Request) -> web.Response:
+        try:
+            m = await service.market_info(_user_id(request), request.match_info["market"])
+        except PermissionError as e:
+            raise web.HTTPConflict(reason=str(e)) from None
+        return web.json_response({"market": m.market, "bid": m.bid, "ask": m.ask, "mid": m.mid})
+
     app.router.add_get("/healthz", healthz)
     app.router.add_post("/v1/grids", create)
     app.router.add_delete("/v1/grids/{instance_id}", stop)
     app.router.add_post("/v1/grids/{instance_id}/pause", pause)
     app.router.add_get("/v1/status", status)
     app.router.add_get("/v1/balance", balance)
+    app.router.add_get("/v1/market/{market}", market)
     return app
 
 

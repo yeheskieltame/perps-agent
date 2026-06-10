@@ -54,13 +54,15 @@ expose the gateway publicly without an auth layer in front.
 | POST | `/v1/grids/{instance_id}/pause` | — | `{"ok": true}` |
 | GET | `/v1/status` | — | `[{"instance_id", "state", "realized_pnl", "fill_count"}]` |
 | GET | `/v1/balance` | — | `{"equity": "73191.75", "available": "...", "currency": "USDT"}` |
+| GET | `/v1/market/{market}` | — | `{"market", "bid", "ask", "mid"}` — live top-of-book via the user's client |
 
 Create-grid body (`POST /v1/grids`):
 
 ```json
 {
   "market": "BTCUSDT",          // required
-  "lower": "56000", "upper": "57100",   // required — band bounds
+  "lower": "56000", "upper": "57100",   // band bounds — OR send "band" instead
+  "band": "0.01",                // shorthand: bounds = live mid * (1 ± band)
   "levels": 10,                  // required
   "order_size": "0.001",         // base qty per level (default 0.01)
   "spacing": "geometric",        // geometric | arithmetic

@@ -79,7 +79,8 @@ async def run(mode: str, market: str, venue_choice: str, leverage: Decimal = Dec
               recenter_interval: float = 0.0, max_inventory: str = "0", max_drawdown: str = "0",
               band: str = "0.01", levels: int = 10, order_size: str = "0.01",
               take_profit: str = "0", trail: str = "0", trail_arm: str = "0",
-              pin_band: bool = False, pin_levels: bool = False, pin_order_size: bool = False) -> None:
+              pin_band: bool = False, pin_levels: bool = False, pin_order_size: bool = False,
+              bias_mode: str = "auto") -> None:
     s = Settings()
     s.assert_consistent()
     ex, chain, venue, signals, store = _build(s, mode, venue_choice)
@@ -96,7 +97,8 @@ async def run(mode: str, market: str, venue_choice: str, leverage: Decimal = Dec
 
     # Tunable grid shape (used when on-chain recall has no verified episode yet).
     policy = ContextualPolicy(default_band=Decimal(band), default_levels=levels, order_size=Decimal(order_size),
-                              pin_band=pin_band, pin_levels=pin_levels, pin_order_size=pin_order_size)
+                              pin_band=pin_band, pin_levels=pin_levels, pin_order_size=pin_order_size,
+                              bias_mode=bias_mode)
     loop = LearningLoop(ex, chain, GridManager(), policy=policy, signals=signals, venue=venue, store=store,
                         breaker=breaker, recenter_interval=monitor_interval, profit_guard=profit_guard)
     recovered = await loop.recover()
@@ -160,6 +162,9 @@ def main() -> None:
     ap.add_argument("--take-profit", default=None, help="bank when total PnL >= this (quote units); 0 = off")
     ap.add_argument("--trail", default=None, help="trailing-stop: bank after giving back this fraction of peak PnL, e.g. 0.3; 0 = off")
     ap.add_argument("--trail-arm", default=None, help="peak PnL that must be reached before the trailing stop arms")
+    ap.add_argument("--bias", choices=["auto", "long", "short", "neutral"], default="auto",
+                    help="grid mode: auto = follow the regime (trend grid in trends, symmetric when ranging); "
+                         "long/short/neutral pin it")
     args = ap.parse_args()
 
     s = Settings()  # defaults for any flag left unset
@@ -175,7 +180,8 @@ def main() -> None:
     trail_arm = args.trail_arm if args.trail_arm is not None else "0"
     asyncio.run(run(args.mode, args.market, args.venue, leverage, recenter, max_inv, max_dd,
                     band, levels, order_size, take_profit, trail, trail_arm,
-                    args.band is not None, args.levels is not None, args.order_size is not None))
+                    args.band is not None, args.levels is not None, args.order_size is not None,
+                    args.bias))
 
 
 if __name__ == "__main__":

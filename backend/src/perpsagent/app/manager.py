@@ -19,13 +19,14 @@ class GridManager:
 
     async def create(self, exchange, cfg: GridConfig, store=None, breaker=None,
                      monitor_interval: float = 0.0, profit_guard=None,
-                     consume: bool = True) -> GridEngine:
+                     consume: bool = True, bias_fn=None) -> GridEngine:
         """Place the grid, then (by default) spawn its own fill consumer. Pass
         `consume=False` when a caller multiplexes one fill stream across many
         engines (per-user routing — see app/session.py); the engine is registered
         but does not open its own stream."""
         engine = GridEngine(exchange, cfg, store, breaker=breaker,
-                            monitor_interval=monitor_interval, profit_guard=profit_guard)
+                            monitor_interval=monitor_interval, profit_guard=profit_guard,
+                            bias_fn=bias_fn)
         await engine.start()
         if store is not None and hasattr(store, "save_instance"):
             await store.save_instance(cfg)

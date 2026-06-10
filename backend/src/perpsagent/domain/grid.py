@@ -53,11 +53,17 @@ def _external_id(instance_id: str, level: int, nonce: int) -> str:
     return f"grid-{instance_id}-L{level}-{nonce}"
 
 
-def build_grid_orders(cfg: GridConfig, levels: list[Decimal], mid: Decimal, nonce: int = 0) -> list[Order]:
+def build_grid_orders(cfg: GridConfig, levels: list[Decimal], mid: Decimal, nonce: int = 0,
+                      bias: int = 0) -> list[Order]:
     """Grid: BUY at every level below mid, SELL at every level above. The level
     nearest mid is skipped to avoid an immediate self-cross. `nonce` namespaces
     the external_ids per generation so re-centered grids never collide with the
-    venue's already-seen orderLinkIds."""
+    venue's already-seen orderLinkIds.
+
+    `bias` shapes the ladder for the regime: 0 places both sides (mean-reversion,
+    ranging market); +1 places ONLY the buy ladder (uptrend — sells then appear
+    organically as paired take-profits of filled buys, so the grid is never net
+    short against the trend); -1 mirrors that for a downtrend."""
     orders: list[Order] = []
     for i, price in enumerate(levels):
         if price < mid:
@@ -66,6 +72,8 @@ def build_grid_orders(cfg: GridConfig, levels: list[Decimal], mid: Decimal, nonc
             side = Side.SELL
         else:
             continue
+        if (bias > 0 and side is Side.SELL) or (bias < 0 and side is Side.BUY):
+            continue  # trend mode: never open inventory against the trend
         orders.append(
             Order(
                 instance_id=cfg.instance_id,

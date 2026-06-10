@@ -17,7 +17,7 @@ def cfg_to_json(c: GridConfig) -> str:
         "lower": str(c.lower), "upper": str(c.upper), "levels": c.levels,
         "order_size": str(c.order_size), "spacing": c.spacing.value,
         "leverage": str(c.leverage), "max_levels": c.max_levels,
-        "policy_version": c.policy_version,
+        "policy_version": c.policy_version, "bias": c.bias,
     })
 
 
@@ -28,5 +28,5 @@ def json_to_cfg(s: str) -> GridConfig:
         lower=Decimal(d["lower"]), upper=Decimal(d["upper"]), levels=int(d["levels"]),
         order_size=Decimal(d["order_size"]), spacing=Spacing(d["spacing"]),
         leverage=Decimal(d["leverage"]), max_levels=int(d["max_levels"]),
-        policy_version=d["policy_version"],
+        policy_version=d["policy_version"], bias=int(d.get("bias", 0)),
     )

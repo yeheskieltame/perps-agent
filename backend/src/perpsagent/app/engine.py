@@ -29,13 +29,19 @@ class GridEngine:
     _exit_retry_delay = 1.0  # backoff base for emergency-exit retries (tests set 0)
 
     def __init__(self, exchange, cfg: GridConfig, store=None, breaker: CircuitBreaker | None = None,
-                 monitor_interval: float = 0.0, profit_guard: ProfitGuard | None = None) -> None:
+                 monitor_interval: float = 0.0, profit_guard: ProfitGuard | None = None,
+                 bias_fn=None) -> None:
         self.ex = exchange
         self.cfg = cfg
         self.store = store
         self.breaker = breaker
         self.profit_guard = profit_guard
         self.monitor_interval = monitor_interval  # seconds; <=0 disables re-center/monitor
+        # Grid mode (see domain/grid.py build_grid_orders): starts at the committed
+        # cfg.bias; an optional async `bias_fn(current_bias) -> int` re-evaluates the
+        # regime on every re-center, so one episode can flow ranging -> trending.
+        self.bias = cfg.bias
+        self.bias_fn = bias_fn
         self.state = GridState.INITIALIZING
         self.levels: list[Decimal] = []
         self.realized = Decimal(0)
@@ -72,7 +78,7 @@ class GridEngine:
         self._upper_ratio = self.cfg.upper / mid
         self.lower, self.upper = self.cfg.lower, self.cfg.upper
         self.levels = [quantize(p, self.tick) for p in plan_levels(self.cfg)]
-        orders = build_grid_orders(self.cfg, self.levels, mid, self._gen)
+        orders = build_grid_orders(self.cfg, self.levels, mid, self._gen, bias=self.bias)
         await self._place_many(orders)
         self.state = GridState.RUNNING
         return orders
@@ -141,24 +147,53 @@ class GridEngine:
         self.state = GridState.REBALANCING
         try:
             await self._cancel_own()
+            if self.bias_fn is not None:  # dynamic mode: re-read the regime each re-center
+                try:
+                    new_bias = await self.bias_fn(self.bias)
+                    if new_bias != self.bias:
+                        print(f"  ~ bias {self.bias:+d} -> {new_bias:+d} (regime shift)")
+                        self.bias = new_bias
+                except Exception as e:  # noqa: BLE001 — a dead signal must not stop the re-center
+                    print(f"  ! bias_fn failed ({e}) — keeping bias {self.bias:+d}")
             self.center = new_mid
             self.lower = new_mid * self._lower_ratio
             self.upper = new_mid * self._upper_ratio
             self.levels = [quantize(p, self.tick)
                            for p in levels_for(self.lower, self.upper, self.cfg.levels, self.cfg.spacing)]
             self._gen += 1
-            orders = build_grid_orders(self.cfg, self.levels, new_mid, self._gen)
+            orders = build_grid_orders(self.cfg, self.levels, new_mid, self._gen, bias=self.bias)
             net = self.net_inventory()
             if net > 0:    # long: don't average UP (no BUY above the entry)
                 orders = [o for o in orders if not (o.side is Side.BUY and o.price > self.pos_avg)]
             elif net < 0:  # short: don't average DOWN (no SELL below the entry)
                 orders = [o for o in orders if not (o.side is Side.SELL and o.price < self.pos_avg)]
+            orders = self._respect_inventory_cap(orders, net)
             await self._place_many(orders)
             print(f"  ~ recenter -> mid {new_mid} band [{self.lower}, {self.upper}] gen {self._gen} "
-                  f"({len(orders)} orders, net_inv {net})")
+                  f"({len(orders)} orders, net_inv {net}, bias {self.bias:+d})")
         finally:
             if self.state is GridState.REBALANCING:  # ALWAYS leave a runnable state (never orphan)
                 self.state = GridState.RUNNING
+
+    def _respect_inventory_cap(self, orders: list[Order], net: Decimal) -> list[Order]:
+        """Cap-aware ladder thinning (issue #34): a re-center must never re-arm the
+        side that grows |inventory| past the breaker cap — that manufactures the
+        very breach the breaker exists to stop. Keeps only as many
+        inventory-increasing orders as the remaining cap room allows, nearest to
+        mid first (they fill first)."""
+        cap = self.breaker.max_inventory if self.breaker is not None else Decimal(0)
+        if cap <= 0 or self.cfg.order_size <= 0 or net == 0:
+            return orders
+        room = int((cap - abs(net)) / self.cfg.order_size)
+        growing = Side.BUY if net > 0 else Side.SELL
+        ladder = [o for o in orders if o.side is growing]
+        if len(ladder) <= room:
+            return orders
+        ladder.sort(key=lambda o: o.price, reverse=(growing is Side.BUY))  # nearest mid first
+        keep = {id(o) for o in ladder[:max(room, 0)]}
+        dropped = len(ladder) - len(keep)
+        print(f"  ~ thinned {dropped} {growing.value} order(s): inventory {net} near cap {cap}")
+        return [o for o in orders if o.side is not growing or id(o) in keep]
 
     async def _cancel_own(self) -> None:
         """Cancel only THIS instance's resting orders, so two grids sharing one

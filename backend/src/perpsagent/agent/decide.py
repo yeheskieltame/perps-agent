@@ -8,7 +8,13 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from ..domain.models import GridConfig, MemoryRecord, Spacing, Venue
+from ..domain.models import GridConfig, MemoryRecord, RegimeFingerprint, Spacing, Venue
+
+# Trend-mode thresholds with hysteresis: enter at |trend| >= ENTER, leave at
+# |trend| < EXIT. The gap stops the grid flapping between shapes on every
+# re-center when trend_strength hovers around one number.
+BIAS_ENTER = 0.4
+BIAS_EXIT = 0.25
 
 
 class ContextualPolicy:
@@ -21,6 +27,7 @@ class ContextualPolicy:
         pin_band: bool = False,
         pin_levels: bool = False,
         pin_order_size: bool = False,
+        bias_mode: str = "auto",  # auto | long | short | neutral
     ) -> None:
         self.version = version
         self.default_band = default_band
@@ -30,11 +37,35 @@ class ContextualPolicy:
         self.pin_band = pin_band
         self.pin_levels = pin_levels
         self.pin_order_size = pin_order_size
+        self.bias_mode = bias_mode
 
     def pinned(self) -> list[str]:
         """Names of the params the user pinned (override recall). For the rationale."""
         return [n for n, p in (("band", self.pin_band), ("levels", self.pin_levels),
                                ("size", self.pin_order_size)) if p]
+
+    def bias_for(self, trend_strength: float, prev_bias: int = 0) -> int:
+        """Map regime trend to a grid bias (+1 up / -1 down / 0 ranging) with
+        hysteresis around `prev_bias`. A pinned bias_mode short-circuits."""
+        if self.bias_mode == "long":
+            return 1
+        if self.bias_mode == "short":
+            return -1
+        if self.bias_mode == "neutral":
+            return 0
+        if prev_bias != 0:  # already in trend mode: stay until trend clearly dies/flips
+            if trend_strength * prev_bias >= BIAS_EXIT:
+                return prev_bias
+            return self.bias_for_fresh(trend_strength)
+        return self.bias_for_fresh(trend_strength)
+
+    @staticmethod
+    def bias_for_fresh(trend_strength: float) -> int:
+        if trend_strength >= BIAS_ENTER:
+            return 1
+        if trend_strength <= -BIAS_ENTER:
+            return -1
+        return 0
 
     def propose(
         self,
@@ -44,6 +75,7 @@ class ContextualPolicy:
         recalled: list[MemoryRecord],
         venue: Venue = Venue.FAKE,
         leverage: Decimal = Decimal(1),
+        regime: RegimeFingerprint | None = None,
     ) -> GridConfig:
         if recalled:
             best = recalled[0]  # chain.recall returns sorted by risk_adjusted desc
@@ -72,6 +104,8 @@ class ContextualPolicy:
             spacing=spacing,
             leverage=leverage,
             policy_version=self.version,
+            bias=self.bias_for(regime.trend_strength) if regime is not None else
+                 (1 if self.bias_mode == "long" else -1 if self.bias_mode == "short" else 0),
         )
 
     def update(self, memory: list[MemoryRecord]) -> None:

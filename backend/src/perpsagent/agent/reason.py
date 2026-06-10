@@ -27,9 +27,12 @@ def explain_decision(regime: RegimeFingerprint, recalled: list[MemoryRecord], cf
             evidence += f"; user-pinned {overrides} override recall"
     else:
         evidence = "no prior verified episodes in this regime — using safe defaults"
+    mode = {1: "trend grid (long-bias: buy the dips, paired sells take profit)",
+            -1: "trend grid (short-bias: sell the rips, paired buys take profit)",
+            }.get(cfg.bias, "symmetric grid (mean-reversion)")
     return (
         f"Regime: {trend} ({bias} bias) | vol={regime.realized_vol:.2f} "
         f"funding={regime.funding_rate:.4f} smart-money={smart} social={social}. "
-        f"{evidence}. Plan: grid [{cfg.lower:.4f}, {cfg.upper:.4f}] x{cfg.levels} "
+        f"{evidence}. Plan: {mode} [{cfg.lower:.4f}, {cfg.upper:.4f}] x{cfg.levels} "
         f"({cfg.spacing.value}), leverage {cfg.leverage}, maker-only, risk-adjusted objective."
     )

@@ -52,6 +52,9 @@ class GridConfig:
     leverage: Decimal = Decimal(1)
     max_levels: int = 180  # safety cap (mirrors deltaperps)
     policy_version: str = "v0"  # provenance for the on-chain commitment
+    # Grid mode for the regime: 0 = symmetric (ranging), +1 = long-bias (uptrend:
+    # buy-ladder only, sells appear as paired take-profits), -1 = short-bias.
+    bias: int = 0
 
 
 @dataclass

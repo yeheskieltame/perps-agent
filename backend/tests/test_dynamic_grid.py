@@ -83,6 +83,42 @@ def test_serde_roundtrips_bias():
     assert json_to_cfg(legacy_json).bias == 0
 
 
+# ---- sense: kline fallback when external signals are blind on a market ----
+
+def test_local_trend_vol_reads_a_rally_and_chop():
+    from perpsagent.agent.sense import local_trend_vol
+
+    rally = [100 * (1.002 ** i) for i in range(60)]       # persistent +0.2%/bar
+    trend, vol = local_trend_vol(rally)
+    assert trend > 0.9 and vol > 0
+
+    chop = [100 + (1 if i % 2 else -1) * 0.05 for i in range(60)]  # pure ping-pong
+    trend, _ = local_trend_vol(chop)
+    assert abs(trend) < 0.2
+
+    dump = [100 * (0.998 ** i) for i in range(60)]
+    assert local_trend_vol(dump)[0] < -0.9
+    assert local_trend_vol([100.0] * 60) == (0.0, 0.0)    # flat -> zero, no div/0
+    assert local_trend_vol([100.0, 101.0]) == (0.0, 0.0)  # too short -> zero
+
+
+async def test_classify_regime_falls_back_to_venue_klines():
+    from perpsagent.agent.sense import classify_regime
+
+    class KlineVenue(FakeExchange):
+        async def klines(self, market, interval="1", limit=60):
+            return [Decimal(100) * (Decimal("1.002") ** i) for i in range(60)]
+
+    regime = await classify_regime(KlineVenue({"mid": "100", "tick": "0.1"}), "HYPEUSDT", [])
+    assert regime.trend_strength > 0.4          # enough to engage trend mode
+    assert regime.realized_vol > 0
+    assert ContextualPolicy().bias_for(regime.trend_strength) == 1
+
+    # a venue with no klines capability keeps the old behaviour (blind zeros)
+    plain = await classify_regime(FakeExchange({"mid": "100", "tick": "0.1"}), "HYPEUSDT", [])
+    assert plain.trend_strength == 0.0
+
+
 # ---- engine: trend mode lays a one-sided ladder; pairs still take profit ----
 
 async def test_engine_long_bias_places_buy_ladder_only():

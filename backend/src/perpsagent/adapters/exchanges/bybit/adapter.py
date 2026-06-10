@@ -92,6 +92,14 @@ class BybitExchange:
         qs = "&".join(f"{k}={v}" for k, v in params.items())
         return _unwrap(await self._request("GET", path, qs))
 
+    async def klines(self, market: str, interval: str = "1", limit: int = 60) -> list[Decimal]:
+        """Close prices, oldest -> newest (public endpoint). Feeds the local
+        regime fallback (agent/sense.py) for markets the external signal
+        providers don't cover."""
+        res = await self._get("/v5/market/kline", {"category": self._category, "symbol": market,
+                                                   "interval": interval, "limit": str(limit)})
+        return [Decimal(row[4]) for row in reversed(res["list"])]
+
     async def _post(self, path: str, body: dict[str, Any]) -> dict:
         raw = json.dumps(body, separators=(",", ":"))
         return _unwrap(await self._request("POST", path, raw))

@@ -29,6 +29,11 @@ CREATE TABLE IF NOT EXISTS fills (
     external_id TEXT, ts INTEGER, level INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_fills_instance ON fills(instance_id);
+CREATE TABLE IF NOT EXISTS credentials (
+    user_id INTEGER PRIMARY KEY,
+    ciphertext BLOB NOT NULL,
+    updated_at INTEGER
+);
 """
 _OPEN_STATES = ("INITIALIZING", "RUNNING", "REBALANCING")
 
@@ -141,6 +146,38 @@ class SqliteStore:
                  qty=Decimal(r[4]), external_id=r[5], ts=int(r[6]), level=int(r[7]))
             for r in rows
         ]
+
+    # ---- credentials (CredentialStorePort) ----
+
+    async def put_credentials(self, user_id: int, ciphertext: bytes) -> None:
+        await asyncio.to_thread(self._put_credentials, user_id, ciphertext)
+
+    def _put_credentials(self, user_id: int, ciphertext: bytes) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO credentials(user_id,ciphertext,updated_at) VALUES(?,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET ciphertext=excluded.ciphertext, updated_at=excluded.updated_at",
+                (user_id, ciphertext, int(time.time())),
+            )
+            self._conn.commit()
+
+    async def get_credentials(self, user_id: int) -> bytes | None:
+        return await asyncio.to_thread(self._get_credentials, user_id)
+
+    def _get_credentials(self, user_id: int) -> bytes | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT ciphertext FROM credentials WHERE user_id=?", (user_id,)
+            ).fetchone()
+        return row[0] if row else None
+
+    async def delete_credentials(self, user_id: int) -> None:
+        await asyncio.to_thread(self._delete_credentials, user_id)
+
+    def _delete_credentials(self, user_id: int) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM credentials WHERE user_id=?", (user_id,))
+            self._conn.commit()
 
     async def close(self) -> None:
         with self._lock:

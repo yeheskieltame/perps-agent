@@ -58,6 +58,18 @@ class WorkerAPI:
     async def balance(self, user_id: int) -> dict:
         return await self._req("GET", "/v1/balance", user_id)
 
+    async def put_credentials(self, user_id: int, api_key: str, api_secret: str,
+                              testnet: bool = True) -> dict:
+        return await self._req("PUT", "/v1/credentials", user_id,
+                               {"api_key": api_key, "api_secret": api_secret,
+                                "testnet": testnet})
+
+    async def get_credentials(self, user_id: int) -> dict:
+        return await self._req("GET", "/v1/credentials", user_id)
+
+    async def delete_credentials(self, user_id: int) -> None:
+        await self._req("DELETE", "/v1/credentials", user_id)
+
     async def close(self) -> None:
         if self._session is not None:
             await self._session.close()

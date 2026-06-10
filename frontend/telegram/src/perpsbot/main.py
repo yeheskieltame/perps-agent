@@ -11,6 +11,8 @@ import asyncio
 from aiogram import BaseMiddleware, Bot, Dispatcher, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import Message
 
 from . import commands
@@ -22,6 +24,24 @@ router = Router()
 
 def _args(m: Message) -> str:
     return (m.text or "").partition(" ")[2].strip()
+
+
+class Connect(StatesGroup):
+    """The /connect dialog: collect key → secret → environment, then store."""
+
+    key = State()
+    secret = State()
+    env = State()
+
+
+async def _scrub(m: Message) -> str:
+    """Delete a message that carries a secret. Best-effort: if Telegram refuses,
+    tell the user to wipe it themselves rather than failing silently."""
+    try:
+        await m.delete()
+        return ""
+    except Exception:
+        return "\n⚠️ I could not delete your last message — please delete it manually."
 
 
 class Allowlist(BaseMiddleware):
@@ -41,6 +61,62 @@ class Allowlist(BaseMiddleware):
 @router.message(Command("help"))
 async def on_start(m: Message) -> None:
     await m.answer(commands.HELP)
+
+
+@router.message(Command("cancel"))
+async def on_cancel(m: Message, state: FSMContext) -> None:
+    await state.clear()
+    await m.answer(commands.CONNECT_CANCELLED)
+
+
+@router.message(Command("connect"))
+async def on_connect(m: Message, state: FSMContext, api: WorkerAPI) -> None:
+    if m.chat.type != "private":
+        await m.answer(commands.CONNECT_DM_ONLY)
+        return
+    await state.set_state(Connect.key)
+    await m.answer(await commands.connect_start(api, m.from_user.id))
+
+
+@router.message(Command("disconnect"))
+async def on_disconnect(m: Message, api: WorkerAPI) -> None:
+    await m.answer(await commands.disconnect(api, m.from_user.id))
+
+
+@router.message(Connect.key)
+async def on_connect_key(m: Message, state: FSMContext) -> None:
+    key = (m.text or "").strip()
+    warn = await _scrub(m)
+    if not key:
+        await m.answer("Send the API key as plain text, or /cancel." + warn)
+        return
+    await state.update_data(key=key)
+    await state.set_state(Connect.secret)
+    await m.answer(commands.CONNECT_ASK_SECRET + warn)
+
+
+@router.message(Connect.secret)
+async def on_connect_secret(m: Message, state: FSMContext) -> None:
+    secret = (m.text or "").strip()
+    warn = await _scrub(m)
+    if not secret:
+        await m.answer("Send the API secret as plain text, or /cancel." + warn)
+        return
+    await state.update_data(secret=secret)
+    await state.set_state(Connect.env)
+    await m.answer(commands.CONNECT_ASK_ENV + warn)
+
+
+@router.message(Connect.env)
+async def on_connect_env(m: Message, state: FSMContext, api: WorkerAPI) -> None:
+    choice = commands.parse_env_choice(m.text or "")
+    if choice is None:
+        await m.answer(commands.CONNECT_BAD_ENV)
+        return
+    data = await state.get_data()
+    await state.clear()
+    await m.answer(await commands.connect_finish(
+        api, m.from_user.id, data["key"], data["secret"], testnet=choice))
 
 
 @router.message(Command("grid"))

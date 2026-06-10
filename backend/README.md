@@ -55,6 +55,9 @@ expose the gateway publicly without an auth layer in front.
 | GET | `/v1/status` | — | `[{"instance_id", "state", "realized_pnl", "fill_count"}]` |
 | GET | `/v1/balance` | — | `{"equity": "73191.75", "available": "...", "currency": "USDT"}` |
 | GET | `/v1/market/{market}` | — | `{"market", "bid", "ask", "mid"}` — live top-of-book via the user's client |
+| PUT | `/v1/credentials` | `{api_key, api_secret, testnet=true}` | `{"ok": true, "testnet": ...}` — seal the user's venue keys (testnet-first; mainnet is explicit opt-in) |
+| GET | `/v1/credentials` | — | `{"connected", "testnet", "key_preview"}` or `{"connected": false}` — never echoes a secret |
+| DELETE | `/v1/credentials` | — | `{"ok": true}` — forget keys + tear down the session |
 
 Create-grid body (`POST /v1/grids`):
 
@@ -71,9 +74,11 @@ Create-grid body (`POST /v1/grids`):
 }
 ```
 
-Errors: `400` malformed body / missing or non-int `X-User-Id` · `409` not your
-grid, or user not owned by this shard (defense-in-depth; the gateway routes
-correctly). States: `INITIALIZING → RUNNING ⇄ REBALANCING → EXITING/HALTED`.
+Errors: `400` malformed body / missing or non-int `X-User-Id` · `401` no stored
+venue keys (call `PUT /v1/credentials` first) · `409` not your grid, or user not
+owned by this shard (defense-in-depth; the gateway routes correctly) · `503`
+credential endpoints without `PERPSAGENT_CRED_MASTER_KEY` configured.
+States: `INITIALIZING → RUNNING ⇄ REBALANCING → EXITING/HALTED`.
 
 ```bash
 curl -X POST localhost:9000/v1/grids -H 'X-User-Id: 42' -H 'Content-Type: application/json' \
@@ -83,9 +88,10 @@ curl localhost:9000/v1/status -H 'X-User-Id: 42'
 
 Multi-tenancy: one `UserSession` per user with its **own** venue client (own keys,
 own private fill stream) — capital and fills are isolated per user by construction.
-Per-user Bybit keys are stored Fernet-encrypted in Postgres
-(`PERPSAGENT_CRED_MASTER_KEY`); without Postgres the worker falls back to a shared
-demo `FakeExchange`.
+With `PERPSAGENT_CRED_MASTER_KEY` set, each user's Bybit keys are stored
+Fernet-encrypted (SQLite by default, Postgres when `PERPSAGENT_POSTGRES_DSN` is
+set) and their client is rebuilt from the sealed keys on demand; without the
+master key the worker falls back to a shared demo `FakeExchange`.
 
 ## 2. `GridService` facade — in-process
 

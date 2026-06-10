@@ -5,6 +5,9 @@ import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
 from perpsagent.adapters.exchanges.fake import FakeExchange
+from perpsagent.adapters.store.credentials import (
+    CredentialAdmin, CredentialCodec, credential_client_factory,
+)
 from perpsagent.app.gateway import build_gateway_app
 from perpsagent.app.service import AppService
 from perpsagent.app.shard import ShardRouter
@@ -91,6 +94,85 @@ async def test_worker_requires_user_header():
         assert (await c.post("/v1/grids", json=GRID)).status == 400
     finally:
         await c.close()
+
+
+class MemCredsStore:
+    """In-memory CredentialStorePort for tests."""
+
+    def __init__(self):
+        self.rows: dict[int, bytes] = {}
+
+    async def put_credentials(self, user_id, ciphertext):
+        self.rows[user_id] = ciphertext
+
+    async def get_credentials(self, user_id):
+        return self.rows.get(user_id)
+
+    async def delete_credentials(self, user_id):
+        self.rows.pop(user_id, None)
+
+
+def _creds_app():
+    codec = CredentialCodec(CredentialCodec.generate_key())
+    store = MemCredsStore()
+    factory = credential_client_factory(
+        store, codec, lambda creds: FakeExchange({"mid": "100", "tick": "0.1"}))
+    service = AppService(client_factory=factory)
+    return build_worker_app(service, "0", creds=CredentialAdmin(store, codec))
+
+
+@pytest.mark.asyncio
+async def test_worker_credentials_flow():
+    """connect → trade → disconnect: 401 without keys, 200 with, 401 again after."""
+    c = await _client(_creds_app())
+    h = {"X-User-Id": "42"}
+    try:
+        assert await (await c.get("/v1/credentials", headers=h)).json() == {"connected": False}
+        assert (await c.post("/v1/grids", headers=h, json=GRID)).status == 401
+
+        r = await c.put("/v1/credentials", headers=h,
+                        json={"api_key": "testkey123", "api_secret": "s3cr3t-value"})
+        assert r.status == 200
+        assert (await r.json()) == {"ok": True, "testnet": True}   # testnet-first default
+
+        info = await (await c.get("/v1/credentials", headers=h)).json()
+        assert info["connected"] is True and info["testnet"] is True
+        assert "s3cr3t-value" not in str(info)        # API never echoes a secret
+        assert info["key_preview"] == "test…"
+
+        assert (await c.post("/v1/grids", headers=h, json=GRID)).status == 200
+        assert (await c.get("/v1/balance", headers=h)).status == 200
+
+        assert (await c.delete("/v1/credentials", headers=h)).status == 200
+        assert await (await c.get("/v1/credentials", headers=h)).json() == {"connected": False}
+        assert (await c.get("/v1/balance", headers=h)).status == 401   # session torn down
+    finally:
+        await c.close()
+
+
+@pytest.mark.asyncio
+async def test_worker_credentials_503_when_not_configured():
+    c = await _client(build_worker_app(_svc(), "0"))   # no creds admin wired
+    try:
+        r = await c.put("/v1/credentials", headers={"X-User-Id": "7"},
+                        json={"api_key": "k", "api_secret": "s"})
+        assert r.status == 503
+    finally:
+        await c.close()
+
+
+@pytest.mark.asyncio
+async def test_sqlite_store_credentials_roundtrip(tmp_path):
+    from perpsagent.adapters.store.sqlite_store import SqliteStore
+
+    store = SqliteStore(str(tmp_path / "t.db"))
+    assert await store.get_credentials(1) is None
+    await store.put_credentials(1, b"blob-a")
+    await store.put_credentials(1, b"blob-b")          # upsert
+    assert await store.get_credentials(1) == b"blob-b"
+    await store.delete_credentials(1)
+    assert await store.get_credentials(1) is None
+    await store.close()
 
 
 @pytest.mark.asyncio

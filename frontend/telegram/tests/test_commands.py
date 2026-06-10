@@ -1,5 +1,4 @@
 """Command logic against a fake API — every user-facing path, offline."""
-import pytest
 
 from perpsbot.api import ApiError
 from perpsbot import commands
@@ -43,6 +42,19 @@ class FakeAPI:
     async def health(self):
         self._maybe_fail()
         return {"ok": True, "node": "0"}
+
+    async def put_credentials(self, uid, api_key, api_secret, testnet=True):
+        self.calls.append(("put_creds", uid, api_key, api_secret, testnet))
+        self._maybe_fail()
+        return {"ok": True, "testnet": testnet}
+
+    async def get_credentials(self, uid):
+        self._maybe_fail()
+        return self.creds if hasattr(self, "creds") else {"connected": False}
+
+    async def delete_credentials(self, uid):
+        self.calls.append(("del_creds", uid))
+        self._maybe_fail()
 
 
 async def test_grid_defaults():
@@ -106,3 +118,37 @@ async def test_health_backend_down():
             raise ConnectionError("connection refused")
 
     assert "unreachable" in await commands.health(DeadAPI())
+
+
+def test_parse_env_choice_is_strict():
+    assert commands.parse_env_choice("testnet") is True
+    assert commands.parse_env_choice("  MAINNET ") is False
+    # anything ambiguous re-asks — mainnet must never come from a typo
+    for bad in ("", "main", "yes", "test net", "mainnet please"):
+        assert commands.parse_env_choice(bad) is None
+
+
+async def test_connect_start_shows_existing_link():
+    api = FakeAPI()
+    assert "API key" in await commands.connect_start(api, 42)        # fresh
+    api.creds = {"connected": True, "testnet": True, "key_preview": "cR8x…"}
+    out = await commands.connect_start(api, 42)
+    assert "Already connected" in out and "cR8x…" in out and "overwrite" in out
+
+
+async def test_connect_finish_and_disconnect():
+    api = FakeAPI()
+    out = await commands.connect_finish(api, 42, "k123", "s456", testnet=True)
+    assert ("put_creds", 42, "k123", "s456", True) in api.calls
+    assert "Connected" in out and "testnet" in out
+    out = await commands.connect_finish(api, 42, "k123", "s456", testnet=False)
+    assert "MAINNET" in out and "real money" in out.lower()
+    assert "Keys forgotten" in await commands.disconnect(api, 42)
+    assert ("del_creds", 42) in api.calls
+
+
+async def test_401_points_to_connect():
+    api = FakeAPI()
+    api.fail = ApiError(401, "no venue credentials — connect your API keys first")
+    out = await commands.grid(api, 42, "BTCUSDT")
+    assert "/connect" in out and "401" not in out                    # friendly, not raw

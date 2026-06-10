@@ -41,6 +41,31 @@ class CredentialCodec:
 class CredentialStorePort(Protocol):
     async def put_credentials(self, user_id: int, ciphertext: bytes) -> None: ...
     async def get_credentials(self, user_id: int) -> bytes | None: ...
+    async def delete_credentials(self, user_id: int) -> None: ...
+
+
+class CredentialAdmin:
+    """Seal/unseal per-user venue keys for the worker's /v1/credentials endpoints.
+    Reads return only non-secret metadata — the API never echoes a key back."""
+
+    def __init__(self, store: CredentialStorePort, codec: CredentialCodec) -> None:
+        self._store, self._codec = store, codec
+
+    async def put(self, user_id: int, api_key: str, api_secret: str, testnet: bool) -> None:
+        blob = self._codec.encrypt(
+            {"api_key": api_key, "api_secret": api_secret, "testnet": testnet})
+        await self._store.put_credentials(user_id, blob)
+
+    async def info(self, user_id: int) -> dict | None:
+        token = await self._store.get_credentials(user_id)
+        if token is None:
+            return None
+        creds = self._codec.decrypt(token)
+        return {"connected": True, "testnet": bool(creds.get("testnet", True)),
+                "key_preview": creds.get("api_key", "")[:4] + "…"}
+
+    async def delete(self, user_id: int) -> None:
+        await self._store.delete_credentials(user_id)
 
 
 def credential_client_factory(

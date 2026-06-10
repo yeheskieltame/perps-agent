@@ -18,11 +18,15 @@ API (user identified by the `X-User-Id` header):
   GET    /v1/status               -> [{instance_id, state, realized_pnl, fill_count}]
   GET    /v1/balance              -> {equity, available, currency}
   GET    /v1/market/{market}      -> {market, bid, ask, mid}
+  PUT    /v1/credentials          {api_key, api_secret, testnet=true} -> {ok, testnet}
+  GET    /v1/credentials          -> {connected, testnet, key_preview} | {connected: false}
+  DELETE /v1/credentials          -> {ok}  (forgets the keys, tears down the session)
 
 A request for a user this shard does not own returns 409 (the gateway should never
-send one — this is defense-in-depth). SKETCH: no auth on X-User-Id, and grids run
-through the GridService facade directly (the verifiable LearningLoop commit/attest
-is a follow-up); see TODOs.
+send one — this is defense-in-depth). A user with no stored venue keys gets 401 on
+any endpoint that needs their exchange client. SKETCH: no auth on X-User-Id, and
+grids run through the GridService facade directly (the verifiable LearningLoop
+commit/attest is a follow-up); see TODOs.
 """
 from __future__ import annotations
 
@@ -62,7 +66,10 @@ def _cfg_from_body(body: dict, node: str) -> GridConfig:
         raise web.HTTPBadRequest(reason=f"bad grid config: {e}") from None
 
 
-def build_worker_app(service: AppService, node: str) -> web.Application:
+_NO_CREDS = "no venue credentials — connect your API keys first"
+
+
+def build_worker_app(service: AppService, node: str, creds=None) -> web.Application:
     app = web.Application()
 
     async def healthz(_request: web.Request) -> web.Response:
@@ -76,12 +83,16 @@ def build_worker_app(service: AppService, node: str) -> web.Application:
         # UI never needs an exchange SDK (the GridService seam stays the boundary).
         if "band" in body and not ("lower" in body or "upper" in body):
             try:
+                market = body["market"]
                 band = Decimal(str(body["band"]))
                 if not Decimal(0) < band < Decimal(1):
                     raise ValueError("band must be a fraction in (0, 1)")
-                m = await service.market_info(user_id, body["market"])
             except (KeyError, ValueError, ArithmeticError) as e:
                 raise web.HTTPBadRequest(reason=f"bad grid config: {e}") from None
+            try:
+                m = await service.market_info(user_id, market)
+            except KeyError:
+                raise web.HTTPUnauthorized(reason=_NO_CREDS) from None
             except PermissionError as e:
                 raise web.HTTPConflict(reason=str(e)) from None
             mid = Decimal(m.mid)
@@ -89,6 +100,8 @@ def build_worker_app(service: AppService, node: str) -> web.Application:
         cfg = _cfg_from_body(body, node)
         try:
             iid = await service.create_grid(user_id, cfg)
+        except KeyError:
+            raise web.HTTPUnauthorized(reason=_NO_CREDS) from None
         except PermissionError as e:
             raise web.HTTPConflict(reason=str(e)) from None
         return web.json_response({"instance_id": iid})
@@ -118,6 +131,8 @@ def build_worker_app(service: AppService, node: str) -> web.Application:
     async def balance(request: web.Request) -> web.Response:
         try:
             b = await service.balance(_user_id(request))
+        except KeyError:
+            raise web.HTTPUnauthorized(reason=_NO_CREDS) from None
         except PermissionError as e:
             raise web.HTTPConflict(reason=str(e)) from None
         return web.json_response({"equity": str(b.equity), "available": str(b.available), "currency": b.currency})
@@ -125,9 +140,42 @@ def build_worker_app(service: AppService, node: str) -> web.Application:
     async def market(request: web.Request) -> web.Response:
         try:
             m = await service.market_info(_user_id(request), request.match_info["market"])
+        except KeyError:
+            raise web.HTTPUnauthorized(reason=_NO_CREDS) from None
         except PermissionError as e:
             raise web.HTTPConflict(reason=str(e)) from None
         return web.json_response({"market": m.market, "bid": m.bid, "ask": m.ask, "mid": m.mid})
+
+    def _creds_or_503():
+        if creds is None:
+            raise web.HTTPServiceUnavailable(
+                reason="credential storage not configured — set PERPSAGENT_CRED_MASTER_KEY")
+        return creds
+
+    async def put_credentials(request: web.Request) -> web.Response:
+        admin = _creds_or_503()
+        user_id = _user_id(request)
+        body = await request.json()
+        api_key = str(body.get("api_key", "")).strip()
+        api_secret = str(body.get("api_secret", "")).strip()
+        if not api_key or not api_secret:
+            raise web.HTTPBadRequest(reason="api_key and api_secret are required")
+        testnet = bool(body.get("testnet", True))  # testnet-first: mainnet is opt-in
+        await admin.put(user_id, api_key, api_secret, testnet)
+        await service.disconnect(user_id)  # next request rebuilds the client on the new keys
+        return web.json_response({"ok": True, "testnet": testnet})
+
+    async def get_credentials(request: web.Request) -> web.Response:
+        admin = _creds_or_503()
+        info = await admin.info(_user_id(request))
+        return web.json_response(info or {"connected": False})
+
+    async def delete_credentials(request: web.Request) -> web.Response:
+        admin = _creds_or_503()
+        user_id = _user_id(request)
+        await admin.delete(user_id)
+        await service.disconnect(user_id)
+        return web.json_response({"ok": True})
 
     app.router.add_get("/healthz", healthz)
     app.router.add_post("/v1/grids", create)
@@ -136,32 +184,49 @@ def build_worker_app(service: AppService, node: str) -> web.Application:
     app.router.add_get("/v1/status", status)
     app.router.add_get("/v1/balance", balance)
     app.router.add_get("/v1/market/{market}", market)
+    app.router.add_put("/v1/credentials", put_credentials)
+    app.router.add_get("/v1/credentials", get_credentials)
+    app.router.add_delete("/v1/credentials", delete_credentials)
     return app
 
 
-def _service_from_settings(s, router, node: str) -> AppService:
-    """Wire the per-user client factory + durable store from config (best-effort)."""
-    store = None
+def _service_from_settings(s, router, node: str):
+    """Wire store + per-user client factory from config. Returns (service, creds_admin).
+
+    Store: Postgres when a DSN is set, else SQLite — both implement
+    CredentialStorePort, so per-user encrypted keys work without Postgres.
+    Clients: with PERPSAGENT_CRED_MASTER_KEY set, each user gets their OWN
+    BybitExchange built from their sealed keys (the product path); without it,
+    a shared in-memory FakeExchange (dev/demo only).
+    """
+    creds_admin = None
     factory = None
     if s.postgres_dsn:
         from ..adapters.store.postgres_store import PostgresStore
 
         store = PostgresStore(s.postgres_dsn)
-        if s.cred_master_key:  # per-user encrypted keys → per-user Bybit client
-            from ..adapters.exchanges.bybit.adapter import BybitExchange
-            from ..adapters.store.credentials import CredentialCodec, credential_client_factory
+    else:
+        from ..adapters.store.sqlite_store import SqliteStore
 
-            codec = CredentialCodec(s.cred_master_key)
-            factory = credential_client_factory(
-                store, codec,
-                lambda creds: BybitExchange({**creds, "rate_limit": s.bybit_rate_limit,
-                                             "max_retries": s.bybit_max_retries}),
-            )
+        store = SqliteStore(s.store_db_path)
+    if s.cred_master_key:  # per-user encrypted keys → per-user Bybit client
+        from ..adapters.exchanges.bybit.adapter import BybitExchange
+        from ..adapters.store.credentials import (
+            CredentialAdmin, CredentialCodec, credential_client_factory,
+        )
+
+        codec = CredentialCodec(s.cred_master_key)
+        factory = credential_client_factory(
+            store, codec,
+            lambda creds: BybitExchange({**creds, "rate_limit": s.bybit_rate_limit,
+                                         "max_retries": s.bybit_max_retries}),
+        )
+        creds_admin = CredentialAdmin(store, codec)
     if factory is None:  # dev/demo fallback: in-memory venue, no keys
         from ..adapters.exchanges.fake import FakeExchange
 
         factory = lambda _uid: FakeExchange({"mid": "100", "tick": "0.1"})  # noqa: E731
-    return AppService(store=store, client_factory=factory, router=router, node=node)
+    return AppService(store=store, client_factory=factory, router=router, node=node), creds_admin
 
 
 def main() -> None:
@@ -171,13 +236,13 @@ def main() -> None:
     s = Settings()
     s.assert_consistent()
     router = ShardRouter(s.shard_count)
-    service = _service_from_settings(s, router, s.shard_node)
+    service, creds_admin = _service_from_settings(s, router, s.shard_node)
 
     async def _startup(_app):
         recovered = await service.recover()
         print(f"[worker {s.shard_node}] recovered {len(recovered)} instance(s)")
 
-    app = build_worker_app(service, s.shard_node)
+    app = build_worker_app(service, s.shard_node, creds=creds_admin)
     app.on_startup.append(_startup)
     print(f"[worker {s.shard_node}/{s.shard_count}] serving on :{s.worker_port}")
     web.run_app(app, port=s.worker_port)

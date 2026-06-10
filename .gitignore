@@ -52,3 +52,5 @@ package-lock.json
 *.db-journal
 backend/perpsagent.db
 .trash/
+*.db-shm
+*.db-wal

@@ -137,6 +137,10 @@ class PostgresStore:
         pool = await self._ensure()
         return await pool.fetchval("SELECT ciphertext FROM credentials WHERE user_id=$1", user_id)
 
+    async def delete_credentials(self, user_id: int) -> None:
+        pool = await self._ensure()
+        await pool.execute("DELETE FROM credentials WHERE user_id=$1", user_id)
+
     async def close(self) -> None:
         if self._pool is not None:
             await self._pool.close()

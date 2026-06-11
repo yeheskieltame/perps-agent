@@ -20,6 +20,14 @@ def _raw(signed) -> bytes:
 
 
 class NonceManager:
+    # Broadcast errors that mean the LOCAL counter is stale, not that the tx is
+    # bad. Live 2026-06-11: two runner processes shared one key, each cached its
+    # own _next, and the laggard's attests died with "nonce too low" (sequencer
+    # err -32000). The cache can also run BEHIND ("nonce too high"/gaps) after a
+    # tx is dropped. Either way: re-seed from the chain and retry once.
+    _STALE_NONCE = ("nonce too low", "nonce too high", "invalid nonce",
+                    "replacement transaction underpriced")
+
     def __init__(self, w3, acct, chain_id: int) -> None:
         self.w3 = w3
         self.acct = acct
@@ -30,9 +38,18 @@ class NonceManager:
     async def submit(self, fn, gas_price: int | None = None) -> str:
         """Build, sign, and broadcast `fn` with the next nonce. Returns the tx hash
         WITHOUT waiting for the receipt. Allocation + broadcast are serialized so
-        nonces never collide; the nonce advances only on a successful broadcast."""
+        nonces never collide; the nonce advances only on a successful broadcast.
+        A stale-nonce broadcast error re-seeds from the chain and retries once —
+        another process sharing this key may have advanced the chain nonce."""
         async with self._lock:
-            return await asyncio.to_thread(self._submit_sync, fn, gas_price)
+            try:
+                return await asyncio.to_thread(self._submit_sync, fn, gas_price)
+            except Exception as e:
+                msg = str(e).lower()
+                if not any(marker in msg for marker in self._STALE_NONCE):
+                    raise
+                self._next = None  # force a fresh pending-count seed
+                return await asyncio.to_thread(self._submit_sync, fn, gas_price)
 
     def _submit_sync(self, fn, gas_price: int | None) -> str:
         if self._next is None:

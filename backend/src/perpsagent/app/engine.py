@@ -27,6 +27,13 @@ from .safety import CircuitBreaker, ProfitGuard
 
 class GridEngine:
     _exit_retry_delay = 1.0  # backoff base for emergency-exit retries (tests set 0)
+    # Thesis-break exit (live 2026-06-11): a slow grind pins the grid at the
+    # inventory cap and waiting for the drawdown breaker donates the whole gap
+    # (-2.5 instead of -1.2). When inventory sits at the cap AND the recent price
+    # path is one-directional against it, the mean-reversion thesis is broken —
+    # exit early. ER = |net move| / path length over the venue's kline window.
+    THESIS_ER = 0.3        # signed efficiency ratio that counts as "directional"
+    THESIS_CAP_FRAC = 0.9  # "at the cap" = within 90% (partials can stop short)
 
     def __init__(self, exchange, cfg: GridConfig, store=None, breaker: CircuitBreaker | None = None,
                  monitor_interval: float = 0.0, profit_guard: ProfitGuard | None = None,
@@ -143,10 +150,40 @@ class GridEngine:
         await self._check_guards(mid)
         if self.state is not GridState.RUNNING:
             return False
+        if await self._thesis_break():
+            return False
         if self.lower <= mid <= self.upper:
             return False
         await self._recenter(mid)
         return True
+
+    async def _thesis_break(self) -> bool:
+        """Exit early when capped inventory faces a one-directional grind (see the
+        THESIS_* constants). Venues without klines skip the check — the breaker
+        remains the backstop."""
+        if self.breaker is None or self.breaker.max_inventory <= 0:
+            return False
+        net = self.net_inventory()
+        if abs(net) < self.breaker.max_inventory * Decimal(str(self.THESIS_CAP_FRAC)):
+            return False
+        kl = getattr(self.ex, "klines", None)
+        if kl is None:
+            return False
+        try:
+            closes = [float(c) for c in await kl(self.cfg.market)]
+        except Exception:  # noqa: BLE001 — a dead feed must not kill the monitor
+            return False
+        if len(closes) < 10:
+            return False
+        path = sum(abs(b - a) for a, b in zip(closes, closes[1:]))
+        if path == 0:
+            return False
+        er = (closes[-1] - closes[0]) / path  # signed: +1 straight up, -1 straight down
+        against = (net > 0 and er <= -self.THESIS_ER) or (net < 0 and er >= self.THESIS_ER)
+        if against:
+            await self._exit(f"thesis break: efficiency {er:+.2f} against {net} "
+                             f"inventory at cap", "thesis-break")
+        return against
 
     async def _recenter(self, new_mid: Decimal) -> None:
         """Cancel the stale grid and re-lay it around `new_mid`, same band shape.

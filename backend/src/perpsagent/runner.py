@@ -143,7 +143,9 @@ async def run(mode: str, market: str, venue_choice: str, leverage: Decimal = Dec
         out = await asyncio.shield(loop.close_and_learn(iid))
         if hasattr(loop.chain, "drain"):  # let fire-then-confirm attest/memory land
             await asyncio.shield(loop.chain.drain())
-        print(f"[live] episode attested: fills={out.fill_count} winrate={out.winrate:.0%} pnl={out.realized_pnl}")
+        status = ("attested" if loop.last_attest_ok else
+                  "closed — attest FAILED, recover with scripts/close_episode.py")
+        print(f"[live] episode {status}: fills={out.fill_count} winrate={out.winrate:.0%} pnl={out.realized_pnl}")
 
 
 def main() -> None:

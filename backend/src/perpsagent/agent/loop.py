@@ -37,6 +37,10 @@ class LearningLoop:
         self._regimes: dict[str, RegimeFingerprint] = {}
         self._seq = 0
         self._rationales: dict[str, str] = {}
+        # Whether the LAST close_and_learn landed its attest tx. Callers report
+        # from this — never print "attested" when the tx failed (live 2026-06-11:
+        # two episodes lost to a nonce race were announced as attested).
+        self.last_attest_ok: bool = False
 
     async def plan_and_launch(self, market: str, leverage: Decimal = Decimal(1)) -> tuple[str, GridConfig, str]:
         regime = await classify_regime(self.exchange, market, self.signals)
@@ -82,7 +86,9 @@ class LearningLoop:
         outcome = engine.outcome()
         try:
             await self.chain.attest(instance_id, outcome)  # attest verified outcome
+            self.last_attest_ok = True
         except Exception as e:  # noqa: BLE001 — keep closing even if one step fails
+            self.last_attest_ok = False
             print(f"  ! attest failed: {e}")
         regime = self._regimes.get(instance_id)
         if regime is not None:

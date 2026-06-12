@@ -100,3 +100,41 @@ async def test_resync_reseeds_from_chain():
     await nm.submit(_FakeFn())     # nonce 100
     assert acct.signed_nonces == [10, 100]
     assert eth.count_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_stale_nonce_reseeds_and_retries():
+    """Live 2026-06-11: two runner processes shared one key; the laggard's cached
+    nonce went stale and its attest died with 'nonce too low'. A stale-nonce
+    broadcast error must re-seed from the chain and retry once."""
+
+    class SharedKeyEth(_FakeEth):
+        def get_transaction_count(self, addr, block):
+            self.count_calls += 1
+            return 74 if self.count_calls == 1 else 80  # stale seed, then fresh
+
+        def send_raw_transaction(self, raw):
+            # the chain is at 80 (another process advanced it); reject anything lower
+            if int(raw.decode().split("-")[1]) < 80:
+                raise ValueError(
+                    "{'code': -32000, 'message': \"failed to forward tx to sequencer, "
+                    "err: 'nonce too low: next nonce 80, tx nonce 74'\"}")
+            return super().send_raw_transaction(raw)
+
+    eth, acct = SharedKeyEth(), _FakeAcct()
+    nm = NonceManager(_FakeW3(eth), acct, 5003)
+    h = await nm.submit(_FakeFn())             # first try at 74 fails -> reseed -> 80
+    assert h.startswith("0x")
+    assert acct.signed_nonces == [74, 80]      # one retry, at the re-seeded nonce
+    assert eth.count_calls == 2                # seeded twice: initial + re-seed
+
+
+@pytest.mark.asyncio
+async def test_non_nonce_errors_still_raise():
+    class Refuses(_FakeEth):
+        def send_raw_transaction(self, raw):
+            raise ValueError("insufficient funds for gas")
+
+    nm = NonceManager(_FakeW3(Refuses()), _FakeAcct(), 5003)
+    with pytest.raises(ValueError, match="insufficient funds"):
+        await nm.submit(_FakeFn())

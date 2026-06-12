@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from ..domain.models import EpisodeOutcome, GridConfig, RegimeFingerprint, Venue
 from .decide import ContextualPolicy
+from .gates import LaunchGated, funding_gate, news_blackout
 from .learn import to_record
 from .reason import explain_decision
 from .recall import recall_best
@@ -23,7 +25,8 @@ from .sense import classify_regime
 class LearningLoop:
     def __init__(self, exchange, chain, manager, policy: ContextualPolicy | None = None,
                  signals: list | None = None, venue: Venue = Venue.FAKE, store=None,
-                 breaker=None, recenter_interval: float = 0.0, profit_guard=None) -> None:
+                 breaker=None, recenter_interval: float = 0.0, profit_guard=None,
+                 news_events: list | None = None) -> None:
         self.exchange = exchange
         self.chain = chain
         self.manager = manager
@@ -33,6 +36,7 @@ class LearningLoop:
         self.store = store
         self.breaker = breaker
         self.profit_guard = profit_guard
+        self.news_events = news_events or []  # scheduled macro events (launch blackout)
         self.recenter_interval = recenter_interval  # >0 enables the live re-center supervisor
         self._regimes: dict[str, RegimeFingerprint] = {}
         self._seq = 0
@@ -43,6 +47,11 @@ class LearningLoop:
         self.last_attest_ok: bool = False
 
     async def plan_and_launch(self, market: str, leverage: Decimal = Decimal(1)) -> tuple[str, GridConfig, str]:
+        """Raises LaunchGated (BEFORE the on-chain commit) when a deploy gate
+        vetoes the episode — not deploying is a valid position."""
+        block = news_blackout(datetime.now(timezone.utc), self.news_events)
+        if block:
+            raise LaunchGated(block)
         regime = await classify_regime(self.exchange, market, self.signals)
         recalled = await recall_best(self.chain, regime)
         bid, ask = await self.exchange.best_bid_ask(market)
@@ -51,17 +60,32 @@ class LearningLoop:
         instance_id = f"{market}-{int(time.time() * 1000)}-{self._seq}"
         cfg = self.policy.propose(instance_id, market, mid, recalled, venue=self.venue,
                                   leverage=leverage, regime=regime)
+        cfg.bias, gate_note = funding_gate(cfg.bias, regime.funding_rate)  # may raise LaunchGated
         if self.breaker is not None and self.breaker.max_inventory <= 0:
             self.breaker.max_inventory = cfg.order_size * cfg.levels * 3  # default cap: 3x nominal one-sided inv
         overrides = "/".join(self.policy.pinned()) if (recalled and self.policy.pinned()) else ""
-        self._rationales[instance_id] = explain_decision(regime, recalled, cfg, overrides)
+        rationale = explain_decision(regime, recalled, cfg, overrides)
+        if gate_note:
+            rationale += f" | funding gate: {gate_note}"
+        self._rationales[instance_id] = rationale
         tx = await self.chain.commit_strategy(instance_id, cfg)  # pre-commit BEFORE trading
 
         async def bias_fn(current: int) -> int:
             """Re-read the regime on each re-center so the grid morphs ranging<->trend
-            mid-episode (hysteresis lives in the policy)."""
+            mid-episode (hysteresis lives in the policy). The funding gate applies
+            to morphs too: extreme funding mid-episode demotes to symmetric (the
+            held side stays protected by thesis-break/breaker, never re-armed
+            into a crowded squeeze)."""
             live = await classify_regime(self.exchange, market, self.signals)
-            return self.policy.bias_for(live.trend_strength, prev_bias=current)
+            b = self.policy.bias_for(live.trend_strength, prev_bias=current)
+            try:
+                b, note = funding_gate(b, live.funding_rate)
+            except LaunchGated as e:
+                print(f"  ~ funding gate (mid-episode): {e.reason} — bias -> 0")
+                return 0
+            if note:
+                print(f"  ~ funding gate: {note}")
+            return b
 
         await self.manager.create(self.exchange, cfg, self.store,  # execute the grid
                                   breaker=self.breaker, monitor_interval=self.recenter_interval,

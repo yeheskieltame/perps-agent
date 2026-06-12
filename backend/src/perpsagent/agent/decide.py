@@ -12,9 +12,11 @@ from ..domain.models import GridConfig, MemoryRecord, RegimeFingerprint, Spacing
 
 # Trend-mode thresholds with hysteresis: enter at |trend| >= ENTER, leave at
 # |trend| < EXIT. The gap stops the grid flapping between shapes on every
-# re-center when trend_strength hovers around one number.
-BIAS_ENTER = 0.4
-BIAS_EXIT = 0.25
+# re-center when trend_strength hovers around one number. ENTER sits at 0.3:
+# slow grinds read ~0.3-0.6 on the multi-window t-stat (live 2026-06-11 —
+# at 0.4 the grid stayed symmetric against a 6% grind until the breaker).
+BIAS_ENTER = 0.3
+BIAS_EXIT = 0.2
 
 
 class ContextualPolicy:

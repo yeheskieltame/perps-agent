@@ -19,6 +19,7 @@ from decimal import Decimal
 from .agent.decide import ContextualPolicy
 from .agent.gates import LaunchGated, parse_news_events
 from .agent.loop import LearningLoop
+from .agent.sense import tf_minutes
 from .app.manager import GridManager
 from .app.safety import AccountGuard, CircuitBreaker, ProfitGuard
 from .config import Settings
@@ -81,7 +82,8 @@ async def run(mode: str, market: str, venue_choice: str, leverage: Decimal = Dec
               band: str = "0.01", levels: int = 10, order_size: str = "0.01",
               take_profit: str = "0", trail: str = "0", trail_arm: str = "0",
               pin_band: bool = False, pin_levels: bool = False, pin_order_size: bool = False,
-              bias_mode: str = "auto", account_drawdown: str = "0") -> None:
+              bias_mode: str = "auto", account_drawdown: str = "0",
+              timeframe: str = "1") -> None:
     s = Settings()
     s.assert_consistent()
     ex, chain, venue, signals, store = _build(s, mode, venue_choice)
@@ -97,7 +99,10 @@ async def run(mode: str, market: str, venue_choice: str, leverage: Decimal = Dec
                                    trail_arm=Decimal(trail_arm))
         if Decimal(account_drawdown) > 0:
             account_guard = AccountGuard(max_drop=Decimal(account_drawdown))
-        monitor_interval = recenter_interval
+        # The supervisor cadence follows the user's timeframe: a 1h grid checked
+        # every 15s reacts to noise the user chose to ignore. bar/4, floor 15s.
+        monitor_interval = recenter_interval if recenter_interval > 0 else max(
+            15.0, tf_minutes(timeframe) * 60 / 4)
 
     # Tunable grid shape (used when on-chain recall has no verified episode yet).
     policy = ContextualPolicy(default_band=Decimal(band), default_levels=levels, order_size=Decimal(order_size),
@@ -105,7 +110,8 @@ async def run(mode: str, market: str, venue_choice: str, leverage: Decimal = Dec
                               bias_mode=bias_mode)
     loop = LearningLoop(ex, chain, GridManager(), policy=policy, signals=signals, venue=venue, store=store,
                         breaker=breaker, recenter_interval=monitor_interval, profit_guard=profit_guard,
-                        news_events=parse_news_events(s.news_events), account_guard=account_guard)
+                        news_events=parse_news_events(s.news_events), account_guard=account_guard,
+                        timeframe=timeframe)
     recovered = await loop.recover()
     if recovered:
         print(f"[{mode}] recovered {len(recovered)} open instance(s) from store")
@@ -162,6 +168,10 @@ def main() -> None:
     ap.add_argument("--mode", choices=["dry", "live"], default="dry")
     ap.add_argument("--venue", choices=["bybit", "mantle_dex"], default="bybit")
     ap.add_argument("--market", default="BTCUSDT")
+    ap.add_argument("--timeframe", default=None,
+                    help="operating timeframe — the bars where YOUR grid pattern lives (1m/5m/15m/1h/4h "
+                         "or Bybit codes 1/5/15/60/240). Sensor, thesis-break, and recenter cadence all "
+                         "follow it. Default: .env PERPSAGENT_TIMEFRAME or 1m")
     ap.add_argument("--leverage", default=None, help="user-chosen leverage, e.g. 10 (default: .env PERPSAGENT_LEVERAGE or 1)")
     ap.add_argument("--recenter-interval", type=float, default=None,
                     help="live re-center cadence in seconds; 0 disables (default: .env or 15)")
@@ -193,10 +203,15 @@ def main() -> None:
     trail = args.trail if args.trail is not None else "0"
     trail_arm = args.trail_arm if args.trail_arm is not None else "0"
     acct_dd = args.account_drawdown if args.account_drawdown is not None else s.account_drawdown
+    # Human timeframes (1m/5m/1h/4h/1d) map onto Bybit interval codes.
+    _tf_alias = {"1m": "1", "3m": "3", "5m": "5", "15m": "15", "30m": "30",
+                 "1h": "60", "2h": "120", "4h": "240", "6h": "360", "12h": "720", "1d": "D"}
+    tf_raw = args.timeframe if args.timeframe is not None else (s.timeframe or "1")
+    timeframe = _tf_alias.get(str(tf_raw).lower(), str(tf_raw))
     asyncio.run(run(args.mode, args.market, args.venue, leverage, recenter, max_inv, max_dd,
                     band, levels, order_size, take_profit, trail, trail_arm,
                     args.band is not None, args.levels is not None, args.order_size is not None,
-                    args.bias, acct_dd))
+                    args.bias, acct_dd, timeframe))
 
 
 if __name__ == "__main__":

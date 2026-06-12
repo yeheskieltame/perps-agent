@@ -39,13 +39,18 @@ class GridEngine:
 
     def __init__(self, exchange, cfg: GridConfig, store=None, breaker: CircuitBreaker | None = None,
                  monitor_interval: float = 0.0, profit_guard: ProfitGuard | None = None,
-                 bias_fn=None, account_guard: AccountGuard | None = None) -> None:
+                 bias_fn=None, account_guard: AccountGuard | None = None,
+                 timeframe: str = "1") -> None:
         self.ex = exchange
         self.cfg = cfg
         self.store = store
         self.breaker = breaker
         self.profit_guard = profit_guard
         self.account_guard = account_guard
+        # The user's operating timeframe: thesis-break reads its efficiency-ratio
+        # window on these bars, so "directional against us" means directional on
+        # the structure the user chose to trade — not on 1m noise.
+        self.timeframe = timeframe
         self._guard_tick = 0  # throttles the account-equity read in the monitor
         self.monitor_interval = monitor_interval  # seconds; <=0 disables re-center/monitor
         # Grid mode (see domain/grid.py build_grid_orders): starts at the committed
@@ -200,7 +205,10 @@ class GridEngine:
         if kl is None:
             return False
         try:
-            closes = [float(c) for c in await kl(self.cfg.market)]
+            try:
+                closes = [float(c) for c in await kl(self.cfg.market, self.timeframe, 60)]
+            except TypeError:  # ports with a (market)-only signature
+                closes = [float(c) for c in await kl(self.cfg.market)]
         except Exception:  # noqa: BLE001 — a dead feed must not kill the monitor
             return False
         if len(closes) < 10:

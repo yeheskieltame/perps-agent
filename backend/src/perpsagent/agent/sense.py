@@ -15,6 +15,14 @@ import math
 from ..domain.models import RegimeFingerprint
 
 
+_TF_MINUTES = {"D": 1440.0, "W": 10080.0, "M": 43200.0}
+
+
+def tf_minutes(timeframe: str) -> float:
+    """Bar size in minutes for a Bybit interval code ('1','5','60','D', ...)."""
+    return _TF_MINUTES.get(str(timeframe).upper()) or float(timeframe)
+
+
 def _tstat(px: list) -> float:
     """Drift/noise t-stat of log returns, clipped to [-1, 1]. A persistent move
     reads near ±1, chop reads near 0 (same scale as the external trend_strength,
@@ -38,16 +46,17 @@ def _block_means(px: list, size: int) -> list:
     return [sum(px[i:i + size]) / size for i in range(0, len(px) - size + 1, size)]
 
 
-def local_trend_vol(closes: list) -> tuple[float, float]:
-    """Trend + realized vol from 1-minute closes (oldest -> newest), scale-free.
+def local_trend_vol(closes: list, bar_minutes: float = 1.0) -> tuple[float, float]:
+    """Trend + realized vol from bar closes (oldest -> newest), scale-free.
 
-    trend: MULTI-WINDOW t-stat — the raw 1m series, the most recent half, and a
+    trend: MULTI-WINDOW t-stat — the raw series, the most recent half, and a
     4-bar block-mean resample; the strongest (by magnitude) wins. One window
     misses what another catches: a fresh break lives in the recent half, while a
-    slow grind (staircase steps inside the 1m noise) only clears the noise once
+    slow grind (staircase steps inside the bar noise) only clears the noise once
     4 bars of drift accumulate per block-mean return (live incident 2026-06-11:
     three markets ground 2-6% while the single-window read stayed "ranging").
-    vol: stdev of 1-minute log returns, daily-ized (sqrt of 1440 minutes)."""
+    vol: stdev of per-bar log returns, daily-ized for the bar size — the same
+    market reads roughly the same daily vol whether sensed on 1m or 1h bars."""
     px = [float(c) for c in closes if float(c) > 0]
     if len(px) < 10:
         return 0.0, 0.0
@@ -56,10 +65,11 @@ def local_trend_vol(closes: list) -> tuple[float, float]:
     mean = sum(rets) / n
     sd = math.sqrt(sum((r - mean) ** 2 for r in rets) / n)
     trend = max((_tstat(w) for w in (px, px[len(px) // 2:], _block_means(px, 4))), key=abs)
-    return trend, sd * math.sqrt(1440.0)
+    return trend, sd * math.sqrt(1440.0 / max(bar_minutes, 1e-9))
 
 
-async def classify_regime(exchange, market: str, signals: list | None = None) -> RegimeFingerprint:
+async def classify_regime(exchange, market: str, signals: list | None = None,
+                          timeframe: str = "1") -> RegimeFingerprint:
     bid, ask = await exchange.best_bid_ask(market)
     mid = (bid + ask) / 2
     spread = float(ask - bid)
@@ -89,15 +99,18 @@ async def classify_regime(exchange, market: str, signals: list | None = None) ->
     # slowly-grinding markets, so the old both-zero gate skipped this read and the
     # grid stayed symmetric against a 6% grind until the breaker. The venue's own
     # candles are ground truth for trend — the stronger signal (by magnitude) wins.
+    # The sensor reads the USER'S timeframe — the grid must sense the structure
+    # on the bars where its pattern actually lives (live 2026-06-12: a 1m sensor
+    # on a 1h structure read micro-noise as regime shifts and flapped the bias).
     range_position = 0.5
     kl = getattr(exchange, "klines", None)
     if kl is not None:
         try:
             try:
-                closes = await kl(market, "1", 240)  # 4h of structure when the venue allows
-            except TypeError:                        # ports with a (market)-only signature
+                closes = await kl(market, timeframe, 240)  # 240 bars of structure
+            except TypeError:                              # ports with a (market)-only signature
                 closes = await kl(market)
-            local_trend, local_vol = local_trend_vol(closes)
+            local_trend, local_vol = local_trend_vol(closes, bar_minutes=tf_minutes(timeframe))
             trend = max(trend, local_trend, key=abs)
             realized_vol = max(realized_vol, local_vol)
             # Where does the CURRENT price sit in the window's band? Launching

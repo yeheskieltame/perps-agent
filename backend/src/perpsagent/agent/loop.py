@@ -26,7 +26,8 @@ class LearningLoop:
     def __init__(self, exchange, chain, manager, policy: ContextualPolicy | None = None,
                  signals: list | None = None, venue: Venue = Venue.FAKE, store=None,
                  breaker=None, recenter_interval: float = 0.0, profit_guard=None,
-                 news_events: list | None = None, account_guard=None) -> None:
+                 news_events: list | None = None, account_guard=None,
+                 timeframe: str = "1") -> None:
         self.exchange = exchange
         self.chain = chain
         self.manager = manager
@@ -38,6 +39,11 @@ class LearningLoop:
         self.profit_guard = profit_guard
         self.news_events = news_events or []  # scheduled macro events (launch blackout)
         self.account_guard = account_guard
+        # The user's operating timeframe (Bybit interval code): the grid senses
+        # structure on the bars where its pattern lives — a 1m sensor on a 1h
+        # structure reads micro-noise as regime shifts and flaps the bias
+        # (live 2026-06-12). Full user choice; flows into SENSE + thesis-break.
+        self.timeframe = timeframe
         self.recenter_interval = recenter_interval  # >0 enables the live re-center supervisor
         self._regimes: dict[str, RegimeFingerprint] = {}
         self._seq = 0
@@ -53,7 +59,7 @@ class LearningLoop:
         block = news_blackout(datetime.now(timezone.utc), self.news_events)
         if block:
             raise LaunchGated(block)
-        regime = await classify_regime(self.exchange, market, self.signals)
+        regime = await classify_regime(self.exchange, market, self.signals, timeframe=self.timeframe)
         recalled = await recall_best(self.chain, regime)
         bid, ask = await self.exchange.best_bid_ask(market)
         mid = (bid + ask) / 2
@@ -77,7 +83,8 @@ class LearningLoop:
             to morphs too: extreme funding mid-episode demotes to symmetric (the
             held side stays protected by thesis-break/breaker, never re-armed
             into a crowded squeeze)."""
-            live = await classify_regime(self.exchange, market, self.signals)
+            live = await classify_regime(self.exchange, market, self.signals,
+                                         timeframe=self.timeframe)
             b = self.policy.bias_for(live.trend_strength, prev_bias=current,
                                      range_position=live.range_position)
             try:
@@ -92,7 +99,7 @@ class LearningLoop:
         await self.manager.create(self.exchange, cfg, self.store,  # execute the grid
                                   breaker=self.breaker, monitor_interval=self.recenter_interval,
                                   profit_guard=self.profit_guard, bias_fn=bias_fn,
-                                  account_guard=self.account_guard)
+                                  account_guard=self.account_guard, timeframe=self.timeframe)
         if self.store is not None and hasattr(self.store, "save_instance"):
             await self.store.save_instance(cfg, regime_json=json.dumps(regime.__dict__))
         self._regimes[instance_id] = regime

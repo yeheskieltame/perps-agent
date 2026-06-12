@@ -4,20 +4,53 @@ from perpsbot.api import ApiError
 from perpsbot import commands
 
 
+# Mirrors the backend's GET /v1/settings payload (validation lives backend-side;
+# the bot only renders what it gets).
+DEFAULTS = {"band": "1", "levels": "10", "size": "0.001", "leverage": "1",
+            "max_inventory": "0", "max_drawdown": "0", "account_dd": "0",
+            "tp": "0", "trail": "0", "trail_arm": "0",
+            "bias": "neutral", "timeframe": "1m", "recenter": "auto"}
+
+
 class FakeAPI:
     def __init__(self):
         self.calls = []
         self.fail: ApiError | None = None
         self.rows = []
+        self.settings = dict(DEFAULTS)
+        self.customized: list[str] = []
 
     def _maybe_fail(self):
         if self.fail:
             raise self.fail
 
-    async def create_grid(self, uid, market, band, levels, size, leverage="1"):
-        self.calls.append(("create", uid, market, band, levels, size))
+    async def create_grid(self, uid, market, settings=None):
+        self.calls.append(("create", uid, market, settings))
         self._maybe_fail()
-        return f"{market}-0-abc123"
+        # the real backend normalizes aliases before merging (app/prefs.py)
+        aliases = {"lev": "leverage", "tf": "timeframe"}
+        normalized = {aliases.get(k, k): v for k, v in (settings or {}).items()}
+        return {"instance_id": f"{market}-0-abc123",
+                "effective": {**self.settings, **normalized},
+                "lower": "99.0", "upper": "101.0"}
+
+    async def get_settings(self, uid):
+        self._maybe_fail()
+        return {"settings": dict(self.settings), "customized": list(self.customized)}
+
+    async def put_settings(self, uid, updates):
+        self.calls.append(("put_settings", uid, updates))
+        self._maybe_fail()
+        self.settings.update(updates)
+        self.customized = sorted(set(self.customized) | set(updates))
+        return {"settings": dict(self.settings), "updated": sorted(updates)}
+
+    async def reset_settings(self, uid):
+        self.calls.append(("reset_settings", uid))
+        self._maybe_fail()
+        self.settings = dict(DEFAULTS)
+        self.customized = []
+        return {"settings": dict(self.settings)}
 
     async def status(self, uid):
         self._maybe_fail()
@@ -57,28 +90,43 @@ class FakeAPI:
         self._maybe_fail()
 
 
-async def test_grid_defaults():
+async def test_grid_no_args_uses_saved_settings():
     api = FakeAPI()
     out = await commands.grid(api, 42, "btcusdt")
-    assert api.calls == [("create", 42, "BTCUSDT", "0.01", 10, "0.001")]
-    assert "Grid launched" in out and "BTCUSDT-0-abc123" in out and "±1%" in out
+    assert api.calls == [("create", 42, "BTCUSDT", None)]   # backend merges saved
+    assert "Grid launched" in out and "BTCUSDT-0-abc123" in out
+    assert "[99.0, 101.0]" in out and "10 levels" in out and "lev 1x" in out
 
 
-async def test_grid_full_args_percent_to_fraction():
+async def test_grid_positional_args_still_work():
     api = FakeAPI()
     out = await commands.grid(api, 42, "ETHUSDT 0.8 12 0.002")
-    assert api.calls == [("create", 42, "ETHUSDT", "0.008", 12, "0.002")]
-    assert "±0.8%" in out and "12 levels" in out
+    assert api.calls == [("create", 42, "ETHUSDT",
+                          {"band": "0.8", "levels": "12", "size": "0.002"})]
+    assert "12 levels" in out and "0.002/level" in out
 
 
-async def test_grid_rejects_bad_args_without_calling_api():
+async def test_grid_key_value_overrides():
+    api = FakeAPI()
+    out = await commands.grid(api, 42, "MNTUSDT band=1.5 lev=25 tp=0.5")
+    assert api.calls == [("create", 42, "MNTUSDT",
+                          {"band": "1.5", "lev": "25", "tp": "0.5"})]
+    assert "lev 25x" in out and "tp 0.5" in out
+
+
+async def test_grid_rejects_malformed_shape_without_calling_api():
     api = FakeAPI()
     assert "Usage" in await commands.grid(api, 42, "")
-    assert "Band" in await commands.grid(api, 42, "BTCUSDT 15")          # >10%
-    assert "Levels" in await commands.grid(api, 42, "BTCUSDT 1 999")
-    assert "Size" in await commands.grid(api, 42, "BTCUSDT 1 10 -2")
-    assert "parse" in await commands.grid(api, 42, "BTCUSDT one")
+    assert "parse" in await commands.grid(api, 42, "BTCUSDT band=")      # empty value
+    assert "Unexpected" in await commands.grid(api, 42, "BTCUSDT 1 10 0.001 extra")
     assert api.calls == []   # nothing reached the backend
+
+
+async def test_grid_shows_backend_validation_verbatim():
+    api = FakeAPI()
+    api.fail = ApiError(400, "band (percent, e.g. 1 = ±1%): must be in [0.05, 10], got 15")
+    out = await commands.grid(api, 42, "BTCUSDT band=15")
+    assert "must be in [0.05, 10]" in out and "❌" in out
 
 
 async def test_grid_surfaces_backend_refusal():
@@ -86,6 +134,37 @@ async def test_grid_surfaces_backend_refusal():
     api.fail = ApiError(409, "user 42 is not on shard 0")
     out = await commands.grid(api, 42, "BTCUSDT")
     assert "409" in out and "shard" in out
+
+
+async def test_settings_card_groups_and_marks_custom():
+    api = FakeAPI()
+    api.settings["leverage"] = "25"
+    api.customized = ["leverage"]
+    out = await commands.settings_show(api, 42)
+    for group in ("Grid shape", "Risk", "Exit", "Behavior"):
+        assert group in out
+    assert "leverage = 25</code> ✏️" in out and "/set KEY VALUE" in out
+
+
+async def test_set_saves_one_key_and_reset_restores():
+    api = FakeAPI()
+    out = await commands.set_value(api, 42, "leverage 25")
+    assert ("put_settings", 42, {"leverage": "25"}) in api.calls
+    assert "Saved" in out and "leverage = 25" in out and "NEW grid" in out
+    out = await commands.set_value(api, 42, "tf=1h")          # KEY=VALUE form too
+    assert ("put_settings", 42, {"tf": "1h"}) in api.calls
+    out = await commands.set_value(api, 42, "reset")
+    assert ("reset_settings", 42) in api.calls
+    assert "reset" in out.lower() and api.settings == DEFAULTS
+
+
+async def test_set_without_args_shows_card_and_bad_value_is_friendly():
+    api = FakeAPI()
+    assert "Your strategy settings" in await commands.set_value(api, 42, "")
+    assert "Usage" in await commands.set_value(api, 42, "leverage")      # value missing
+    api.fail = ApiError(400, "unknown setting 'banana' — valid: band, levels, ...")
+    out = await commands.set_value(api, 42, "banana 1")
+    assert "unknown setting" in out and "400" not in out                 # friendly, not raw
 
 
 async def test_status_empty_and_rows():

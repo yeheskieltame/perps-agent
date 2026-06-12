@@ -120,11 +120,18 @@ async def on_connect_env(m: Message, state: FSMContext, api: WorkerAPI) -> None:
 
 
 @router.message(Command("grid"))
-async def on_grid(m: Message, api: WorkerAPI, settings: BotSettings) -> None:
-    await m.answer(await commands.grid(api, m.from_user.id, _args(m),
-                                       band=settings.default_band,
-                                       levels=settings.default_levels,
-                                       size=settings.default_size))
+async def on_grid(m: Message, api: WorkerAPI) -> None:
+    await m.answer(await commands.grid(api, m.from_user.id, _args(m)))
+
+
+@router.message(Command("settings"))
+async def on_settings(m: Message, api: WorkerAPI) -> None:
+    await m.answer(await commands.settings_show(api, m.from_user.id))
+
+
+@router.message(Command("set"))
+async def on_set(m: Message, api: WorkerAPI) -> None:
+    await m.answer(await commands.set_value(api, m.from_user.id, _args(m)))
 
 
 @router.message(Command("status"))

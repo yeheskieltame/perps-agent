@@ -16,6 +16,9 @@ API (user identified by the `X-User-Id` header):
   DELETE /v1/grids/{instance_id}
   POST   /v1/grids/{instance_id}/pause
   GET    /v1/status               -> [{instance_id, state, realized_pnl, fill_count}]
+  GET    /v1/settings             -> {settings: {band, levels, size, leverage, ...}, customized: [...]}
+  PUT    /v1/settings             {key: value, ...} -> validated, persisted per user
+  DELETE /v1/settings             -> reset to defaults
   GET    /v1/balance              -> {equity, available, currency}
   GET    /v1/market/{market}      -> {market, bid, ask, mid}
   PUT    /v1/credentials          {api_key, api_secret, testnet=true} -> {ok, testnet}
@@ -36,6 +39,7 @@ from decimal import Decimal
 from aiohttp import web
 
 from ..domain.models import GridConfig, Spacing, Venue
+from . import prefs
 from .service import AppService
 
 
@@ -49,18 +53,26 @@ def _user_id(request: web.Request) -> int:
         raise web.HTTPBadRequest(reason="X-User-Id must be an integer") from None
 
 
-def _cfg_from_body(body: dict, node: str) -> GridConfig:
+def _cfg_from_body(body: dict, node: str, knobs: dict) -> GridConfig:
+    """Grid config = transport fields from the body + tunables from the user's
+    merged knobs (defaults < saved settings < body["settings"] overrides).
+    Legacy top-level levels/order_size/leverage (the pre-settings API) still win."""
     try:
+        fields = prefs.grid_fields(knobs)
+        if "levels" in body:
+            fields["levels"] = int(body["levels"])
+        if "order_size" in body:
+            fields["order_size"] = Decimal(str(body["order_size"]))
+        if "leverage" in body:
+            fields["leverage"] = Decimal(str(body["leverage"]))
         return GridConfig(
             instance_id=f"{body['market']}-{node}-{uuid.uuid4().hex[:8]}",
             venue=Venue(body.get("venue", "bybit")),
             market=body["market"],
             lower=Decimal(str(body["lower"])),
             upper=Decimal(str(body["upper"])),
-            levels=int(body["levels"]),
-            order_size=Decimal(str(body.get("order_size", "0.01"))),
             spacing=Spacing(body.get("spacing", "geometric")),
-            leverage=Decimal(str(body.get("leverage", "1"))),
+            **fields,
         )
     except (KeyError, ValueError) as e:
         raise web.HTTPBadRequest(reason=f"bad grid config: {e}") from None
@@ -78,15 +90,24 @@ def build_worker_app(service: AppService, node: str, creds=None) -> web.Applicat
     async def create(request: web.Request) -> web.Response:
         user_id = _user_id(request)
         body = await request.json()
-        # Band shorthand: a UI may send {band: 0.01} instead of absolute bounds —
-        # the worker resolves them from the user's own live top-of-book, so the
-        # UI never needs an exchange SDK (the GridService seam stays the boundary).
-        if "band" in body and not ("lower" in body or "upper" in body):
+        # Merge the user's tunables: defaults < saved settings < body["settings"].
+        try:
+            overrides = prefs.validate_updates(body.get("settings") or {})
+        except ValueError as e:
+            raise web.HTTPBadRequest(reason=str(e)) from None
+        knobs = prefs.merged(await service.get_settings(user_id), overrides)
+        # Bounds: explicit lower/upper > legacy {band: fraction} > knob band (%).
+        # The worker resolves band bounds from the user's own live top-of-book, so
+        # the UI never needs an exchange SDK (the GridService seam stays the boundary).
+        if not ("lower" in body or "upper" in body):
             try:
                 market = body["market"]
-                band = Decimal(str(body["band"]))
-                if not Decimal(0) < band < Decimal(1):
-                    raise ValueError("band must be a fraction in (0, 1)")
+                if "band" in body:  # legacy shorthand: fraction in (0, 1)
+                    band = Decimal(str(body["band"]))
+                    if not Decimal(0) < band < Decimal(1):
+                        raise ValueError("band must be a fraction in (0, 1)")
+                else:
+                    band = prefs.band_fraction(knobs)
             except (KeyError, ValueError, ArithmeticError) as e:
                 raise web.HTTPBadRequest(reason=f"bad grid config: {e}") from None
             try:
@@ -97,14 +118,44 @@ def build_worker_app(service: AppService, node: str, creds=None) -> web.Applicat
                 raise web.HTTPConflict(reason=str(e)) from None
             mid = Decimal(m.mid)
             body["lower"], body["upper"] = str(mid * (1 - band)), str(mid * (1 + band))
-        cfg = _cfg_from_body(body, node)
+        cfg = _cfg_from_body(body, node, knobs)
+        breaker, profit_guard, account_guard = prefs.build_guards(knobs)
         try:
-            iid = await service.create_grid(user_id, cfg)
+            iid = await service.create_grid(
+                user_id, cfg, breaker=breaker, profit_guard=profit_guard,
+                account_guard=account_guard, timeframe=prefs.timeframe_code(knobs),
+                monitor_interval=prefs.monitor_interval(knobs),
+            )
         except KeyError:
             raise web.HTTPUnauthorized(reason=_NO_CREDS) from None
         except PermissionError as e:
             raise web.HTTPConflict(reason=str(e)) from None
-        return web.json_response({"instance_id": iid})
+        return web.json_response({"instance_id": iid, "effective": knobs,
+                                  "lower": str(cfg.lower), "upper": str(cfg.upper)})
+
+    async def get_settings(request: web.Request) -> web.Response:
+        user_id = _user_id(request)
+        saved = await service.get_settings(user_id)
+        return web.json_response({"settings": prefs.merged(saved),
+                                  "customized": sorted(k for k in saved if k in prefs.KNOBS)})
+
+    async def put_settings(request: web.Request) -> web.Response:
+        user_id = _user_id(request)
+        body = await request.json()
+        try:
+            updates = prefs.validate_updates(body)
+        except ValueError as e:
+            raise web.HTTPBadRequest(reason=str(e)) from None
+        if not updates:
+            raise web.HTTPBadRequest(reason="no settings given")
+        saved = {**await service.get_settings(user_id), **updates}
+        await service.put_settings(user_id, saved)
+        return web.json_response({"settings": prefs.merged(saved), "updated": sorted(updates)})
+
+    async def delete_settings(request: web.Request) -> web.Response:
+        user_id = _user_id(request)
+        await service.reset_settings(user_id)
+        return web.json_response({"settings": prefs.merged(None)})
 
     async def stop(request: web.Request) -> web.Response:
         try:
@@ -179,6 +230,9 @@ def build_worker_app(service: AppService, node: str, creds=None) -> web.Applicat
 
     app.router.add_get("/healthz", healthz)
     app.router.add_post("/v1/grids", create)
+    app.router.add_get("/v1/settings", get_settings)
+    app.router.add_put("/v1/settings", put_settings)
+    app.router.add_delete("/v1/settings", delete_settings)
     app.router.add_delete("/v1/grids/{instance_id}", stop)
     app.router.add_post("/v1/grids/{instance_id}/pause", pause)
     app.router.add_get("/v1/status", status)

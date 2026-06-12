@@ -40,11 +40,25 @@ class WorkerAPI:
     async def market(self, user_id: int, market: str) -> dict:
         return await self._req("GET", f"/v1/market/{market}", user_id)
 
-    async def create_grid(self, user_id: int, market: str, band: str, levels: int,
-                          size: str, leverage: str = "1") -> str:
-        body = {"market": market, "band": band, "levels": levels,
-                "order_size": size, "leverage": leverage}
-        return (await self._req("POST", "/v1/grids", user_id, body))["instance_id"]
+    async def create_grid(self, user_id: int, market: str,
+                          settings: dict | None = None) -> dict:
+        """Launch a grid. `settings` are per-launch knob overrides (band in %,
+        levels, size, leverage, tp, ... — validated backend-side); everything not
+        given comes from the user's saved settings, then defaults. Returns the
+        full response: {instance_id, effective, lower, upper}."""
+        body: dict = {"market": market}
+        if settings:
+            body["settings"] = settings
+        return await self._req("POST", "/v1/grids", user_id, body)
+
+    async def get_settings(self, user_id: int) -> dict:
+        return await self._req("GET", "/v1/settings", user_id)
+
+    async def put_settings(self, user_id: int, updates: dict) -> dict:
+        return await self._req("PUT", "/v1/settings", user_id, updates)
+
+    async def reset_settings(self, user_id: int) -> dict:
+        return await self._req("DELETE", "/v1/settings", user_id)
 
     async def status(self, user_id: int) -> list[dict]:
         return await self._req("GET", "/v1/status", user_id)

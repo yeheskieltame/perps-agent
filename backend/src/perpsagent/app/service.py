@@ -6,6 +6,7 @@ this facade small, typed, and versioned (mirrors deltaperps).
 from __future__ import annotations
 
 import inspect
+import json
 from dataclasses import dataclass
 from typing import Callable, Protocol, Sequence
 
@@ -41,6 +42,9 @@ class GridService(Protocol):
     async def status(self, user_id: int) -> Sequence[GridStatus]: ...
     async def balance(self, user_id: int) -> BalanceView: ...
     async def market_info(self, user_id: int, market: str) -> MarketView: ...
+    async def get_settings(self, user_id: int) -> dict: ...
+    async def put_settings(self, user_id: int, settings: dict) -> None: ...
+    async def reset_settings(self, user_id: int) -> None: ...
 
 
 class AppService:
@@ -69,13 +73,18 @@ class AppService:
         self._router = router
         self._node = str(node) if node is not None else None
         self._sessions: dict[int, UserSession] = {}
+        self._prefs: dict[int, dict] = {}  # settings fallback when the store has none
 
     def _on_shard(self, user_id: int) -> bool:
         return self._router is None or self._node is None or self._router.owns(user_id, self._node)
 
-    async def create_grid(self, user_id: int, cfg: GridConfig) -> str:
+    async def create_grid(self, user_id: int, cfg: GridConfig, *, breaker=None,
+                          monitor_interval: float = 0.0, profit_guard=None,
+                          account_guard=None, timeframe: str = "1") -> str:
         session = await self._session(user_id)
-        await session.create(cfg)
+        await session.create(cfg, breaker=breaker, monitor_interval=monitor_interval,
+                             profit_guard=profit_guard, account_guard=account_guard,
+                             timeframe=timeframe)
         return cfg.instance_id
 
     async def recover(self) -> list[tuple[int, str]]:
@@ -128,6 +137,28 @@ class AppService:
         session = self._sessions.pop(user_id, None)
         if session is not None:
             await session.aclose()
+
+    # ---- per-user strategy settings (validated upstream — app/prefs.py) ----
+    # Durable via the store when it has settings methods; in-memory otherwise
+    # (dev/demo and stores predating the user_settings table).
+
+    async def get_settings(self, user_id: int) -> dict:
+        if self._store is not None and hasattr(self._store, "get_settings"):
+            raw = await self._store.get_settings(user_id)
+            return json.loads(raw) if raw else {}
+        return dict(self._prefs.get(user_id, {}))
+
+    async def put_settings(self, user_id: int, settings: dict) -> None:
+        if self._store is not None and hasattr(self._store, "put_settings"):
+            await self._store.put_settings(user_id, json.dumps(settings))
+        else:
+            self._prefs[user_id] = dict(settings)
+
+    async def reset_settings(self, user_id: int) -> None:
+        if self._store is not None and hasattr(self._store, "delete_settings"):
+            await self._store.delete_settings(user_id)
+        else:
+            self._prefs.pop(user_id, None)
 
     # ---- internals ----
 

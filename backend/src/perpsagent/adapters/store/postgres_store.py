@@ -38,6 +38,11 @@ CREATE TABLE IF NOT EXISTS credentials (
     ciphertext BYTEA NOT NULL,
     updated_at BIGINT
 );
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id BIGINT PRIMARY KEY,
+    settings TEXT NOT NULL,
+    updated_at BIGINT
+);
 """
 
 
@@ -140,6 +145,24 @@ class PostgresStore:
     async def delete_credentials(self, user_id: int) -> None:
         pool = await self._ensure()
         await pool.execute("DELETE FROM credentials WHERE user_id=$1", user_id)
+
+    # ---- per-user strategy settings (JSON of validated knobs — app/prefs.py) ----
+
+    async def put_settings(self, user_id: int, settings_json: str) -> None:
+        pool = await self._ensure()
+        await pool.execute(
+            "INSERT INTO user_settings(user_id,settings,updated_at) VALUES($1,$2,$3) "
+            "ON CONFLICT(user_id) DO UPDATE SET settings=EXCLUDED.settings, updated_at=EXCLUDED.updated_at",
+            user_id, settings_json, int(time.time()),
+        )
+
+    async def get_settings(self, user_id: int) -> str | None:
+        pool = await self._ensure()
+        return await pool.fetchval("SELECT settings FROM user_settings WHERE user_id=$1", user_id)
+
+    async def delete_settings(self, user_id: int) -> None:
+        pool = await self._ensure()
+        await pool.execute("DELETE FROM user_settings WHERE user_id=$1", user_id)
 
     async def close(self) -> None:
         if self._pool is not None:

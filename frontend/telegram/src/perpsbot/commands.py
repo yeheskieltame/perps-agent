@@ -3,8 +3,6 @@ reply string (HTML). No aiogram imports, so every path is unit-testable offline.
 """
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
-
 from .api import ApiError
 
 HELP = (
@@ -13,8 +11,11 @@ HELP = (
     "<b>Commands</b>\n"
     "/connect — link your own Bybit API keys (DM only)\n"
     "/disconnect — forget your keys\n"
-    "/grid MARKET [BAND% [LEVELS [SIZE]]] — launch a grid\n"
-    "    e.g. <code>/grid BTCUSDT</code> or <code>/grid BTCUSDT 0.8 12 0.002</code>\n"
+    "/grid MARKET [overrides] — launch a grid with YOUR settings\n"
+    "    e.g. <code>/grid BTCUSDT</code> or <code>/grid MNTUSDT band=1.5 lev=25</code>\n"
+    "/settings — your strategy settings (band, leverage, take-profit, ...)\n"
+    "/set KEY VALUE — change one setting, e.g. <code>/set leverage 25</code>\n"
+    "/set reset — back to defaults\n"
     "/status — your grids (state, pnl, fills)\n"
     "/stop INSTANCE — cancel orders, close the grid\n"
     "/pause INSTANCE — halt new orders\n"
@@ -93,38 +94,140 @@ async def disconnect(api, user_id: int) -> str:
     return "🗑 Keys forgotten and session closed. /connect to link again."
 
 
-async def grid(api, user_id: int, args: str, *, band: str = "0.01",
-               levels: int = 10, size: str = "0.001") -> str:
-    parts = args.split()
-    if not parts:
-        return ("Usage: <code>/grid MARKET [BAND% [LEVELS [SIZE]]]</code>\n"
-                "e.g. <code>/grid BTCUSDT 1 10 0.001</code> = ±1% band, 10 levels, 0.001/level")
-    market = parts[0].upper()
+# Settings card: group -> [(key, hint)]. Keys mirror the backend knob registry
+# (backend app/prefs.py); the card just renders whatever the backend returns.
+SETTING_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
+    ("Grid shape", [("band", "± percent around price"),
+                    ("levels", "grid levels"),
+                    ("size", "base qty per level")]),
+    ("Risk", [("leverage", "1..100"),
+              ("max_inventory", "net-position cap · 0 = auto"),
+              ("max_drawdown", "loss cap, quote · 0 = off"),
+              ("account_dd", "wallet kill-switch, quote · 0 = off")]),
+    ("Exit", [("tp", "bank when PnL ≥ this, quote · 0 = off"),
+              ("trail", "give-back fraction of peak · 0 = off"),
+              ("trail_arm", "peak needed before trail arms")]),
+    ("Behavior", [("bias", "long / short / neutral"),
+                  ("timeframe", "1m 5m 15m 1h 4h 1d"),
+                  ("recenter", "supervisor cadence, s · auto = bar/4")]),
+]
+
+GRID_USAGE = ("Usage: <code>/grid MARKET [KEY=VALUE ...]</code>\n"
+              "e.g. <code>/grid BTCUSDT</code> (your /settings) or "
+              "<code>/grid MNTUSDT band=1.5 levels=4 lev=25</code>\n"
+              "Old style still works: <code>/grid BTCUSDT 1 10 0.001</code> "
+              "= ±1% band, 10 levels, 0.001/level")
+
+
+def settings_card(settings: dict, customized: list[str] | None = None) -> str:
+    """Render the grouped settings card. Keys the user changed get a ✏️ marker."""
+    custom = set(customized or [])
+    lines = ["⚙️ <b>Your strategy settings</b> — every new /grid uses these"]
+    shown = set()
+    for group, keys in SETTING_GROUPS:
+        rows = [(k, hint) for k, hint in keys if k in settings]
+        if not rows:
+            continue
+        lines.append(f"\n<b>{group}</b>")
+        for k, hint in rows:
+            mark = " ✏️" if k in custom else ""
+            lines.append(f"  <code>{k} = {settings[k]}</code>{mark} — {hint}")
+            shown.add(k)
+    for k in sorted(set(settings) - shown):  # backend added a knob the card doesn't know
+        lines.append(f"  <code>{k} = {settings[k]}</code>")
+    lines.append("\nChange one: <code>/set KEY VALUE</code> · reset: <code>/set reset</code>\n"
+                 "Override once: <code>/grid MARKET KEY=VALUE ...</code>")
+    return "\n".join(lines)
+
+
+async def settings_show(api, user_id: int) -> str:
     try:
-        if len(parts) > 1:  # band given in PERCENT (1 = ±1%)
-            pct = Decimal(parts[1])
-            if not Decimal(0) < pct <= Decimal(10):
-                return "Band must be in (0, 10] percent."
-            band = str(pct / 100)
-        if len(parts) > 2:
-            levels = int(parts[2])
-            if not 2 <= levels <= 200:
-                return "Levels must be 2..200."
-        if len(parts) > 3:
-            if Decimal(parts[3]) <= 0:
-                return "Size must be positive."
-            size = parts[3]
-    except (InvalidOperation, ValueError):
-        return "Could not parse arguments. Usage: <code>/grid MARKET [BAND% [LEVELS [SIZE]]]</code>"
-    try:
-        iid = await api.create_grid(user_id, market, band, levels, size)
+        resp = await api.get_settings(user_id)
     except ApiError as e:
         return _err(e)
-    pct_label = Decimal(band) * 100
-    return (f"✅ <b>Grid launched</b>\n"
-            f"instance: <code>{iid}</code>\n"
-            f"{market} · ±{pct_label.normalize()}% band · {levels} levels · {size}/level\n"
-            f"Use /status to follow it, /stop <code>{iid}</code> to close.")
+    return settings_card(resp.get("settings", {}), resp.get("customized"))
+
+
+async def set_value(api, user_id: int, args: str) -> str:
+    """/set — show card; /set KEY VALUE (or KEY=VALUE) — change one; /set reset."""
+    parts = args.replace("=", " ").split()
+    if not parts:
+        return await settings_show(api, user_id)
+    if parts[0].lower() == "reset":
+        try:
+            resp = await api.reset_settings(user_id)
+        except ApiError as e:
+            return _err(e)
+        return "↩️ Settings reset to defaults.\n\n" + settings_card(resp.get("settings", {}))
+    if len(parts) != 2:
+        return ("Usage: <code>/set KEY VALUE</code>, e.g. <code>/set leverage 25</code>\n"
+                "See your keys with /settings · <code>/set reset</code> for defaults")
+    key, value = parts
+    try:
+        resp = await api.put_settings(user_id, {key: value})
+    except ApiError as e:
+        if e.status == 400:  # validation message is user-facing by design
+            return f"❌ {e.detail or 'invalid setting'}"
+        return _err(e)
+    changed = ", ".join(f"<code>{k} = {resp['settings'][k]}</code>"
+                        for k in resp.get("updated", []) if k in resp.get("settings", {}))
+    return (f"✅ Saved: {changed}\n"
+            f"Applies to every NEW grid (running grids keep their config). /settings to review.")
+
+
+def _parse_grid_args(args: str) -> tuple[str, dict] | str:
+    """'MARKET [BAND% [LEVELS [SIZE]]] [KEY=VALUE ...]' -> (market, overrides),
+    or a user-facing error string. Validation of values is backend-side; only
+    shape errors are caught here so nothing reaches the API malformed."""
+    parts = args.split()
+    if not parts:
+        return GRID_USAGE
+    market, rest = parts[0].upper(), parts[1:]
+    overrides: dict[str, str] = {}
+    positional = ("band", "levels", "size")
+    pos = 0
+    for tok in rest:
+        if "=" in tok:
+            key, _, value = tok.partition("=")
+            if not key or not value:
+                return f"Could not parse <code>{tok}</code>. " + GRID_USAGE
+            overrides[key.lower()] = value
+            pos = len(positional)  # key=value ends the positional section
+        elif pos < len(positional):
+            overrides[positional[pos]] = tok
+            pos += 1
+        else:
+            return f"Unexpected argument <code>{tok}</code>. " + GRID_USAGE
+    return market, overrides
+
+
+async def grid(api, user_id: int, args: str) -> str:
+    parsed = _parse_grid_args(args)
+    if isinstance(parsed, str):
+        return parsed
+    market, overrides = parsed
+    try:
+        resp = await api.create_grid(user_id, market, overrides or None)
+    except ApiError as e:
+        if e.status == 400:
+            return f"❌ {e.detail or 'invalid grid arguments'}\n{GRID_USAGE}"
+        return _err(e)
+    iid, eff = resp["instance_id"], resp.get("effective", {})
+    lines = ["✅ <b>Grid launched</b>", f"instance: <code>{iid}</code>"]
+    if eff:
+        risk = f"lev {eff.get('leverage', '?')}x · bias {eff.get('bias', '?')} · tf {eff.get('timeframe', '?')}"
+        exits = []
+        if eff.get("tp", "0") != "0":
+            exits.append(f"tp {eff['tp']}")
+        if eff.get("trail", "0") != "0":
+            exits.append(f"trail {eff['trail']}")
+        lines.append(f"{market} [{resp.get('lower', '?')}, {resp.get('upper', '?')}] · "
+                     f"{eff.get('levels', '?')} levels · {eff.get('size', '?')}/level")
+        lines.append(risk + (" · " + " ".join(exits) if exits else " · exit guards off"))
+    else:
+        lines.append(market)
+    lines.append(f"Use /status to follow it, /stop <code>{iid}</code> to close.")
+    return "\n".join(lines)
 
 
 async def status(api, user_id: int) -> str:

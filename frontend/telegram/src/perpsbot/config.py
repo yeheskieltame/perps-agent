@@ -11,9 +11,7 @@ class BotSettings(BaseSettings):
     token: str = ""                          # @BotFather token (required to run)
     api_url: str = "http://127.0.0.1:9000"   # worker (dev) or gateway (prod)
     allowlist: str = ""                      # comma-separated user ids; empty = allow all (dev)
-    default_band: str = "0.01"               # half-band fraction for /grid
-    default_levels: int = 10
-    default_size: str = "0.001"              # base qty per level
+    # grid defaults live BACKEND-side now (per-user /settings — backend app/prefs.py)
 
     def allowed_ids(self) -> set[int]:
         return {int(x) for x in self.allowlist.split(",") if x.strip()}

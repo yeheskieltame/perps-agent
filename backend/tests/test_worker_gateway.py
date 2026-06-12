@@ -1,6 +1,8 @@
 """Sharded serving: the worker HTTP facade (incl. off-shard rejection) and the
 gateway reverse-proxy routing each user to the worker that owns them. All on
 FakeExchange + aiohttp test servers (no keys/network)."""
+from decimal import Decimal
+
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
@@ -197,3 +199,71 @@ async def test_gateway_routes_to_owning_worker():
         await gw.close()
         await w0.close()
         await w1.close()
+
+
+@pytest.mark.asyncio
+async def test_settings_crud_and_knobs_reach_the_engine():
+    """The Telegram path: save settings → /grid with no args uses them, and the
+    engine actually receives the guards/timeframe they describe."""
+    svc = _svc()
+    c = await _client(build_worker_app(svc, "0"))
+    h = {"X-User-Id": "7"}
+    try:
+        # defaults out of the box, nothing customized
+        s0 = await (await c.get("/v1/settings", headers=h)).json()
+        assert s0["settings"]["leverage"] == "1" and s0["customized"] == []
+
+        # save a few knobs (with aliases); unknown/bad ones are 400 + named
+        r = await c.put("/v1/settings", headers=h,
+                        json={"lev": "25", "band": "2", "tp": "0.5", "tf": "1h"})
+        assert r.status == 200
+        s1 = (await r.json())["settings"]
+        assert (s1["leverage"], s1["band"], s1["tp"], s1["timeframe"]) == ("25", "2", "0.5", "1h")
+        assert (await c.put("/v1/settings", headers=h, json={"banana": "1"})).status == 400
+        assert (await c.put("/v1/settings", headers=h, json={"leverage": "0"})).status == 400
+
+        # /grid with just a market: bounds from the saved band (mid 100 ± 2%)
+        r = await c.post("/v1/grids", headers=h, json={"market": "BTCUSDT"})
+        assert r.status == 200
+        body = await r.json()
+        assert body["effective"]["leverage"] == "25"
+        assert (Decimal(body["lower"]), Decimal(body["upper"])) == (Decimal("98"), Decimal("102"))
+
+        # the engine got the knobs, not just the response text
+        eng = svc._sessions[7].engines()[0]
+        assert eng.cfg.leverage == 25
+        assert eng.profit_guard.take_profit == Decimal("0.5")
+        assert eng.breaker.max_inventory > 0          # auto cap is on by default
+        assert eng.timeframe == "60" and eng.monitor_interval == 900.0  # 1h bar/4
+
+        # per-launch override beats saved; reset restores defaults
+        r = await c.post("/v1/grids", headers=h,
+                         json={"market": "BTCUSDT", "settings": {"leverage": "5", "bias": "long"}})
+        assert (await r.json())["effective"]["leverage"] == "5"
+        assert svc._sessions[7].engines()[-1].cfg.bias == 1
+        assert (await c.delete("/v1/settings", headers=h)).status == 200
+        s2 = await (await c.get("/v1/settings", headers=h)).json()
+        assert s2["settings"]["leverage"] == "1"
+    finally:
+        await c.close()
+
+
+@pytest.mark.asyncio
+async def test_legacy_grid_body_still_wins_over_knobs():
+    """Pre-settings callers send levels/order_size/leverage top-level and band as
+    a FRACTION — that contract must keep working unchanged."""
+    svc = _svc()
+    c = await _client(build_worker_app(svc, "0"))
+    h = {"X-User-Id": "9"}
+    try:
+        r = await c.post("/v1/grids", headers=h, json=GRID)   # explicit lower/upper
+        assert r.status == 200
+        eng = svc._sessions[9].engines()[0]
+        assert eng.cfg.levels == 11 and eng.cfg.order_size == Decimal("0.01")
+        r = await c.post("/v1/grids", headers=h,
+                         json={"market": "BTCUSDT", "band": "0.01", "levels": 5})
+        assert r.status == 200
+        body = await r.json()
+        assert (Decimal(body["lower"]), Decimal(body["upper"])) == (Decimal("99"), Decimal("101"))  # fraction, not %
+    finally:
+        await c.close()

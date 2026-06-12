@@ -34,6 +34,11 @@ CREATE TABLE IF NOT EXISTS credentials (
     ciphertext BLOB NOT NULL,
     updated_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS user_settings (
+    user_id INTEGER PRIMARY KEY,
+    settings TEXT NOT NULL,
+    updated_at INTEGER
+);
 """
 _OPEN_STATES = ("INITIALIZING", "RUNNING", "REBALANCING")
 
@@ -177,6 +182,38 @@ class SqliteStore:
     def _delete_credentials(self, user_id: int) -> None:
         with self._lock:
             self._conn.execute("DELETE FROM credentials WHERE user_id=?", (user_id,))
+            self._conn.commit()
+
+    # ---- per-user strategy settings (JSON of validated knobs — app/prefs.py) ----
+
+    async def put_settings(self, user_id: int, settings_json: str) -> None:
+        await asyncio.to_thread(self._put_settings, user_id, settings_json)
+
+    def _put_settings(self, user_id: int, settings_json: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO user_settings(user_id,settings,updated_at) VALUES(?,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET settings=excluded.settings, updated_at=excluded.updated_at",
+                (user_id, settings_json, int(time.time())),
+            )
+            self._conn.commit()
+
+    async def get_settings(self, user_id: int) -> str | None:
+        return await asyncio.to_thread(self._get_settings, user_id)
+
+    def _get_settings(self, user_id: int) -> str | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT settings FROM user_settings WHERE user_id=?", (user_id,)
+            ).fetchone()
+        return row[0] if row else None
+
+    async def delete_settings(self, user_id: int) -> None:
+        await asyncio.to_thread(self._delete_settings, user_id)
+
+    def _delete_settings(self, user_id: int) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM user_settings WHERE user_id=?", (user_id,))
             self._conn.commit()
 
     async def close(self) -> None:

@@ -12,7 +12,26 @@ def _fake_worker(seen: list) -> web.Application:
 
     async def create(request: web.Request) -> web.Response:
         seen.append((request.headers.get("X-User-Id"), await request.json()))
-        return web.json_response({"instance_id": "BTCUSDT-0-abc123"})
+        return web.json_response({"instance_id": "BTCUSDT-0-abc123",
+                                  "effective": {"leverage": "25"},
+                                  "lower": "99.0", "upper": "101.0"})
+
+    settings: dict[str, dict] = {}
+
+    async def get_settings(request: web.Request) -> web.Response:
+        uid = request.headers.get("X-User-Id")
+        return web.json_response({"settings": settings.get(uid, {"leverage": "1"}),
+                                  "customized": sorted(settings.get(uid, {}))})
+
+    async def put_settings(request: web.Request) -> web.Response:
+        uid = request.headers.get("X-User-Id")
+        body = await request.json()
+        settings.setdefault(uid, {}).update(body)
+        return web.json_response({"settings": settings[uid], "updated": sorted(body)})
+
+    async def del_settings(request: web.Request) -> web.Response:
+        settings.pop(request.headers.get("X-User-Id"), None)
+        return web.json_response({"settings": {"leverage": "1"}})
 
     async def status(request: web.Request) -> web.Response:
         if request.headers.get("X-User-Id") != "42":
@@ -40,6 +59,9 @@ def _fake_worker(seen: list) -> web.Application:
         return web.json_response({"ok": True})
 
     app.router.add_post("/v1/grids", create)
+    app.router.add_get("/v1/settings", get_settings)
+    app.router.add_put("/v1/settings", put_settings)
+    app.router.add_delete("/v1/settings", del_settings)
     app.router.add_get("/v1/status", status)
     app.router.add_put("/v1/credentials", put_creds)
     app.router.add_get("/v1/credentials", get_creds)
@@ -47,18 +69,37 @@ def _fake_worker(seen: list) -> web.Application:
     return app
 
 
-async def test_create_sends_band_body_and_user_header():
+async def test_create_sends_overrides_and_user_header():
     seen: list = []
     server = TestServer(_fake_worker(seen))
     await server.start_server()
     api = WorkerAPI(str(server.make_url("/")))
     try:
-        iid = await api.create_grid(42, "BTCUSDT", "0.01", 10, "0.001")
-        assert iid == "BTCUSDT-0-abc123"
+        resp = await api.create_grid(42, "BTCUSDT", {"band": "1.5", "lev": "25"})
+        assert resp["instance_id"] == "BTCUSDT-0-abc123"
+        assert resp["effective"]["leverage"] == "25"
         uid, body = seen[0]
         assert uid == "42"
-        assert body == {"market": "BTCUSDT", "band": "0.01", "levels": 10,
-                        "order_size": "0.001", "leverage": "1"}
+        assert body == {"market": "BTCUSDT", "settings": {"band": "1.5", "lev": "25"}}
+
+        resp = await api.create_grid(42, "BTCUSDT")        # no overrides -> bare body
+        assert seen[1][1] == {"market": "BTCUSDT"}
+    finally:
+        await api.close()
+        await server.close()
+
+
+async def test_settings_roundtrip():
+    server = TestServer(_fake_worker([]))
+    await server.start_server()
+    api = WorkerAPI(str(server.make_url("/")))
+    try:
+        assert (await api.get_settings(42))["settings"] == {"leverage": "1"}
+        r = await api.put_settings(42, {"leverage": "25"})
+        assert r == {"settings": {"leverage": "25"}, "updated": ["leverage"]}
+        assert (await api.get_settings(42))["customized"] == ["leverage"]
+        r = await api.reset_settings(42)
+        assert r["settings"] == {"leverage": "1"}
     finally:
         await api.close()
         await server.close()

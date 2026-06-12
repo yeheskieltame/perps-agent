@@ -6,6 +6,16 @@ fills (rehydrate), then: attest (skipped if already attested) → write Strategy
 it is re-sampled from live signals now (flagged as approximation).
 
     cd backend && PYTHONPATH=src python3 scripts/close_episode.py
+
+Pass instance ids to recover SPECIFIC episodes regardless of stored state —
+an episode can be CLOSED in the store yet missing its attest (live 2026-06-11:
+two attest txs died in a nonce race AFTER the store flipped to CLOSED):
+
+    PYTHONPATH=src python3 scripts/close_episode.py MNTUSDT-1781112143940-1 ...
+
+`--no-memory` recovers the attestation only — for an episode whose write_memory
+DID land (re-writing would duplicate the StrategyMemory record and overweight
+that config in recall).
 """
 import asyncio
 import json
@@ -33,9 +43,23 @@ async def main() -> None:
         s.strategy_memory_addr, s.vault_addr or None,
         detail_path=s.memory_detail_path or None,
     )
-    open_instances = await store.load_open_instances()
+    args = sys.argv[1:]
+    write_mem = "--no-memory" not in args
+    wanted = [a for a in args if not a.startswith("--")]
+    if wanted:  # targeted recovery: by id, regardless of stored state
+        from perpsagent.adapters.store.serde import json_to_cfg
+        open_instances = []
+        for iid in wanted:
+            row = store._conn.execute(  # noqa: SLF001 — ops script, direct read is fine
+                "SELECT config FROM instances WHERE instance_id=?", (iid,)).fetchone()
+            if row is None:
+                print(f"!! {iid}: not in the store — skipped")
+                continue
+            open_instances.append(json_to_cfg(row[0]))
+    else:
+        open_instances = await store.load_open_instances()
     if not open_instances:
-        print("no RUNNING instances — nothing to close")
+        print("no matching instances — nothing to close")
         return
     for cfg in open_instances:
         iid = cfg.instance_id
@@ -63,9 +87,14 @@ async def main() -> None:
             regime = await classify_regime(FakeExchange({}), cfg.market, sigs)
             src = "re-sampled now (approximation — launch regime was not persisted)"
         print(f"   regime ({src}): {regime}")
-        print("   write_memory:", (await chain.write_memory(to_record(regime, cfg, out)))[:18], "…")
+        if write_mem:
+            print("   write_memory:", (await chain.write_memory(to_record(regime, cfg, out)))[:18], "…")
+        else:
+            print("   write_memory: skipped (--no-memory)")
         await store.set_state(iid, "CLOSED")
         print("   state: CLOSED ✓")
+    if hasattr(chain, "drain"):  # let fire-then-confirm txs land before exit
+        await chain.drain()
 
 
 if __name__ == "__main__":

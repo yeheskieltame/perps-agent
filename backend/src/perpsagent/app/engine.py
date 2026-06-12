@@ -205,15 +205,21 @@ class GridEngine:
             return False
         if len(closes) < 10:
             return False
-        path = sum(abs(b - a) for a, b in zip(closes, closes[1:]))
-        if path == 0:
-            return False
-        er = (closes[-1] - closes[0]) / path  # signed: +1 straight up, -1 straight down
-        against = (net > 0 and er <= -self.THESIS_ER) or (net < 0 and er >= self.THESIS_ER)
-        if against:
-            await self._exit(f"thesis break: efficiency {er:+.2f} against {net} "
-                             f"inventory at cap", "thesis-break", Decimal(str(closes[-1])))
-        return against
+        # Two windows: the full read AND its most recent half. A fast dump lives
+        # inside the half-window while the full window still remembers the rally
+        # that preceded it (live 2026-06-12, LAB ep 2: a 3.5%/30min dump diluted
+        # to ER < 0.3 over the hour — the breaker paid the difference).
+        for window in (closes, closes[len(closes) // 2:]):
+            path = sum(abs(b - a) for a, b in zip(window, window[1:]))
+            if path == 0:
+                continue
+            er = (window[-1] - window[0]) / path  # signed: +1 straight up, -1 straight down
+            if (net > 0 and er <= -self.THESIS_ER) or (net < 0 and er >= self.THESIS_ER):
+                await self._exit(f"thesis break: efficiency {er:+.2f} over {len(window)} bars "
+                                 f"against {net} inventory at cap", "thesis-break",
+                                 Decimal(str(window[-1])))
+                return True
+        return False
 
     async def _recenter(self, new_mid: Decimal) -> None:
         """Cancel the stale grid and re-lay it around `new_mid`, same band shape.

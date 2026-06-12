@@ -9,6 +9,7 @@ HELP = (
     "<b>Perps Agent</b> — verifiable grid trading.\n"
     "Executes on Bybit; commits, learns and proves on Mantle.\n\n"
     "<b>Commands</b>\n"
+    "/start — the dashboard: every button on one screen\n"
     "/connect — link your own Bybit API keys (DM only)\n"
     "/disconnect — forget your keys\n"
     "/grid MARKET [overrides] — launch a grid with YOUR settings\n"
@@ -138,6 +139,70 @@ def settings_card(settings: dict, customized: list[str] | None = None) -> str:
     lines.append("\nChange one: <code>/set KEY VALUE</code> · reset: <code>/set reset</code>\n"
                  "Override once: <code>/grid MARKET KEY=VALUE ...</code>")
     return "\n".join(lines)
+
+
+# ---- one-screen dashboard (ui.py renders; these gather/act, error-tolerant) ----
+
+async def dashboard_data(api, user_id: int) -> tuple[dict | None, dict | None, list[dict]]:
+    """(credentials, balance, grids) for the home screen. Each call degrades
+    independently — a 401 means 'not connected', never a broken dashboard."""
+    creds = balance = None
+    grids: list[dict] = []
+    try:
+        creds = await api.get_credentials(user_id)
+    except ApiError:
+        pass
+    if creds and creds.get("connected"):
+        try:
+            balance = await api.balance(user_id)
+        except ApiError:
+            balance = None
+    try:
+        grids = list(await api.status(user_id))
+    except ApiError:
+        pass
+    return creds, balance, grids
+
+
+async def launch_note(api, user_id: int, market: str) -> str:
+    """Launch with the user's saved settings; one-line result for the dashboard."""
+    try:
+        resp = await api.create_grid(user_id, market.upper())
+    except ApiError as e:
+        return _err(e)
+    eff = resp.get("effective", {})
+    return (f"✅ Launched <code>{resp['instance_id']}</code> — "
+            f"{eff.get('levels', '?')} levels · lev {eff.get('leverage', '?')}x · "
+            f"[{resp.get('lower', '?')}, {resp.get('upper', '?')}]")
+
+
+async def stop_note(api, user_id: int, instance_id: str) -> str:
+    try:
+        await api.stop(user_id, instance_id)
+    except ApiError as e:
+        return _err(e)
+    return f"🛑 Stopped <code>{instance_id}</code> — orders cancelled."
+
+
+async def price_toast(api, user_id: int, market: str) -> str:
+    """Plain text (Telegram toasts don't render HTML)."""
+    try:
+        m = await api.market(user_id, market.upper())
+    except ApiError as e:
+        return f"{market}: {e.detail or e.status}"
+    return f"{m['market']}  mid {m['mid']}  (bid {m['bid']} / ask {m['ask']})"
+
+
+async def cycle_setting(api, user_id: int, key: str, next_value) -> tuple[str, dict]:
+    """Cycle an enumerable knob to its next preset. Returns (plain toast, new
+    settings dict) — the caller re-renders the settings screen."""
+    try:
+        current = (await api.get_settings(user_id)).get("settings", {})
+        new = next_value(key, current.get(key, ""))
+        resp = await api.put_settings(user_id, {key: new})
+    except ApiError as e:
+        return (e.detail or f"error {e.status}", {})
+    return (f"{key} → {new}", resp.get("settings", {}))
 
 
 async def settings_show(api, user_id: int) -> str:

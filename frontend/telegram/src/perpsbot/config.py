@@ -11,10 +11,14 @@ class BotSettings(BaseSettings):
     token: str = ""                          # @BotFather token (required to run)
     api_url: str = "http://127.0.0.1:9000"   # worker (dev) or gateway (prod)
     allowlist: str = ""                      # comma-separated user ids; empty = allow all (dev)
+    markets: str = "BTCUSDT,ETHUSDT,SOLUSDT,MNTUSDT"  # dashboard quick-pick buttons
     # grid defaults live BACKEND-side now (per-user /settings — backend app/prefs.py)
 
     def allowed_ids(self) -> set[int]:
         return {int(x) for x in self.allowlist.split(",") if x.strip()}
+
+    def market_list(self) -> list[str]:
+        return [m.strip().upper() for m in self.markets.split(",") if m.strip()]
 
 
 def is_allowed(user_id: int | None, allow: set[int]) -> bool:

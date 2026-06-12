@@ -8,14 +8,16 @@ from __future__ import annotations
 
 import asyncio
 
-from aiogram import BaseMiddleware, Bot, Dispatcher, Router
+from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import Message
+from aiogram.types import (BotCommand, CallbackQuery, InlineKeyboardButton,
+                           InlineKeyboardMarkup, Message)
 
-from . import commands
+from . import commands, ui
 from .api import WorkerAPI
 from .config import BotSettings, is_allowed
 
@@ -57,10 +59,122 @@ class Allowlist(BaseMiddleware):
         return await handler(event, data)
 
 
+# ---- one-screen dashboard (ui.py builds rows; everything edits in place) ----
+
+def _kb(rows: ui.Rows) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t, callback_data=d) for t, d in row] for row in rows
+    ])
+
+
+async def _dash(api: WorkerAPI, user_id: int, note: str = "") -> tuple[str, InlineKeyboardMarkup]:
+    creds, balance, grids = await commands.dashboard_data(api, user_id)
+    text = ui.dashboard_text(creds, balance, grids, note)
+    return text, _kb(ui.menu_rows(bool(creds and creds.get("connected"))))
+
+
+async def _edit(cb: CallbackQuery, text: str, kb: InlineKeyboardMarkup) -> None:
+    """Edit the dashboard message in place; 'message is not modified' is fine."""
+    try:
+        await cb.message.edit_text(text, reply_markup=kb)
+    except TelegramBadRequest:
+        pass
+
+
+async def _show_home(cb: CallbackQuery, api: WorkerAPI, note: str = "") -> None:
+    text, kb = await _dash(api, cb.from_user.id, note)
+    await _edit(cb, text, kb)
+
+
+async def _show_settings(cb: CallbackQuery, api: WorkerAPI) -> None:
+    resp = await api.get_settings(cb.from_user.id)
+    settings = resp.get("settings", {})
+    text = commands.settings_card(settings, resp.get("customized"))
+    await _edit(cb, text, _kb(ui.settings_rows(settings)))
+
+
 @router.message(CommandStart())
+async def on_start(m: Message, api: WorkerAPI) -> None:
+    text, kb = await _dash(api, m.from_user.id)
+    await m.answer(text, reply_markup=kb)
+
+
 @router.message(Command("help"))
-async def on_start(m: Message) -> None:
+async def on_help(m: Message) -> None:
     await m.answer(commands.HELP)
+
+
+@router.callback_query(F.data.startswith("d:"))
+async def on_nav(cb: CallbackQuery, api: WorkerAPI, state: FSMContext,
+                 settings: BotSettings) -> None:
+    action = cb.data[2:]
+    uid = cb.from_user.id
+    if action == "home":
+        await _show_home(cb, api)
+    elif action == "launch":
+        await _edit(cb, "🚀 <b>Pick a market</b> — launches with your /settings\n"
+                        "Other market or one-off tweak: <code>/grid MARKET KEY=VALUE</code>",
+                    _kb(ui.market_rows(settings.market_list(), "g")))
+    elif action == "price":
+        await _edit(cb, "💱 <b>Pick a market</b>",
+                    _kb(ui.market_rows(settings.market_list(), "p")))
+    elif action == "stopmenu":
+        _, _, grids = await commands.dashboard_data(api, uid)
+        if not grids:
+            await cb.answer("No grids running.")
+            return
+        await _edit(cb, "⏹ <b>Stop which grid?</b>",
+                    _kb(ui.stop_rows([g["instance_id"] for g in grids])))
+    elif action == "settings":
+        await _show_settings(cb, api)
+    elif action == "reset":
+        await api.reset_settings(uid)
+        await _show_settings(cb, api)
+        await cb.answer("Settings reset to defaults.")
+        return
+    elif action == "help":
+        await _edit(cb, commands.HELP, _kb(ui.back_rows()))
+    elif action == "connect":
+        if cb.message.chat.type != "private":
+            await cb.answer("🔒 DM only — open a private chat with me.", show_alert=True)
+            return
+        await state.set_state(Connect.key)
+        await cb.message.answer(await commands.connect_start(api, uid))
+    elif action == "disconnect":
+        await _show_home(cb, api, await commands.disconnect(api, uid))
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("g:"))
+async def on_launch_market(cb: CallbackQuery, api: WorkerAPI) -> None:
+    await _show_home(cb, api, await commands.launch_note(api, cb.from_user.id, cb.data[2:]))
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("p:"))
+async def on_price_pick(cb: CallbackQuery, api: WorkerAPI) -> None:
+    await cb.answer(await commands.price_toast(api, cb.from_user.id, cb.data[2:]),
+                    show_alert=True)
+
+
+@router.callback_query(F.data.startswith("x:"))
+async def on_stop_pick(cb: CallbackQuery, api: WorkerAPI) -> None:
+    await _show_home(cb, api, await commands.stop_note(api, cb.from_user.id, cb.data[2:]))
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("s:"))
+async def on_cycle_setting(cb: CallbackQuery, api: WorkerAPI) -> None:
+    toast, new = await commands.cycle_setting(api, cb.from_user.id, cb.data[2:], ui.next_value)
+    await cb.answer(toast)
+    if new:
+        await _edit(cb, commands.settings_card(new), _kb(ui.settings_rows(new)))
+
+
+@router.callback_query(F.data.startswith("t:"))
+async def on_typed_setting(cb: CallbackQuery) -> None:
+    key = cb.data[2:]
+    await cb.answer(f"Type:  /set {key} VALUE\ne.g.  /set {key} 0.5", show_alert=True)
 
 
 @router.message(Command("cancel"))
@@ -117,6 +231,8 @@ async def on_connect_env(m: Message, state: FSMContext, api: WorkerAPI) -> None:
     await state.clear()
     await m.answer(await commands.connect_finish(
         api, m.from_user.id, data["key"], data["secret"], testnet=choice))
+    text, kb = await _dash(api, m.from_user.id)   # land back on the dashboard
+    await m.answer(text, reply_markup=kb)
 
 
 @router.message(Command("grid"))
@@ -164,12 +280,29 @@ async def on_health(m: Message, api: WorkerAPI) -> None:
     await m.answer(await commands.health(api))
 
 
+COMMAND_MENU = [
+    ("start", "dashboard — everything on one screen"),
+    ("grid", "launch: /grid MARKET [KEY=VALUE ...]"),
+    ("settings", "your strategy settings"),
+    ("set", "change one: /set KEY VALUE"),
+    ("status", "your grids"),
+    ("stop", "stop a grid"),
+    ("balance", "venue equity"),
+    ("price", "top-of-book"),
+    ("connect", "link Bybit API keys (DM)"),
+    ("help", "all commands"),
+]
+
+
 async def _run(settings: BotSettings) -> None:
     api = WorkerAPI(settings.api_url)
     bot = Bot(settings.token, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher(api=api, settings=settings)
-    router.message.middleware(Allowlist(settings.allowed_ids()))
+    allow = Allowlist(settings.allowed_ids())
+    router.message.middleware(allow)
+    router.callback_query.middleware(allow)  # buttons must pass the same gate
     dp.include_router(router)
+    await bot.set_my_commands([BotCommand(command=c, description=d) for c, d in COMMAND_MENU])
     try:
         await dp.start_polling(bot)
     finally:

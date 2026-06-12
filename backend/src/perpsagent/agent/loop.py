@@ -78,7 +78,8 @@ class LearningLoop:
             held side stays protected by thesis-break/breaker, never re-armed
             into a crowded squeeze)."""
             live = await classify_regime(self.exchange, market, self.signals)
-            b = self.policy.bias_for(live.trend_strength, prev_bias=current)
+            b = self.policy.bias_for(live.trend_strength, prev_bias=current,
+                                     range_position=live.range_position)
             try:
                 b, note = funding_gate(b, live.funding_rate)
             except LaunchGated as e:

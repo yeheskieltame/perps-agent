@@ -18,6 +18,15 @@ from ..domain.models import GridConfig, MemoryRecord, RegimeFingerprint, Spacing
 BIAS_ENTER = 0.3
 BIAS_EXIT = 0.2
 
+# Structure veto (live 2026-06-12, LAB ep 2): a with-trend bias entering range
+# EXHAUSTION (price already at the extreme of the recent window) is buying the
+# top / selling the bottom — the very leg that produced the trend read is what
+# put price at the extreme. Veto to symmetric unless the trend is strong enough
+# to call it a genuine breakout.
+RANGE_HIGH = 0.8        # price above this fraction of the window band = exhausted up
+RANGE_LOW = 0.2         # below this = exhausted down
+BREAKOUT_TREND = 0.6    # |trend| from which the move overrides the structure veto
+
 
 class ContextualPolicy:
     def __init__(
@@ -46,20 +55,22 @@ class ContextualPolicy:
         return [n for n, p in (("band", self.pin_band), ("levels", self.pin_levels),
                                ("size", self.pin_order_size)) if p]
 
-    def bias_for(self, trend_strength: float, prev_bias: int = 0) -> int:
+    def bias_for(self, trend_strength: float, prev_bias: int = 0,
+                 range_position: float = 0.5) -> int:
         """Map regime trend to a grid bias (+1 up / -1 down / 0 ranging) with
-        hysteresis around `prev_bias`. A pinned bias_mode short-circuits."""
+        hysteresis around `prev_bias`, then apply the structure veto. A pinned
+        bias_mode short-circuits (an explicit user choice wins, veto included)."""
         if self.bias_mode == "long":
             return 1
         if self.bias_mode == "short":
             return -1
         if self.bias_mode == "neutral":
             return 0
-        if prev_bias != 0:  # already in trend mode: stay until trend clearly dies/flips
-            if trend_strength * prev_bias >= BIAS_EXIT:
-                return prev_bias
-            return self.bias_for_fresh(trend_strength)
-        return self.bias_for_fresh(trend_strength)
+        if prev_bias != 0 and trend_strength * prev_bias >= BIAS_EXIT:
+            bias = prev_bias  # already in trend mode: stay until trend clearly dies/flips
+        else:
+            bias = self.bias_for_fresh(trend_strength)
+        return self._structure_veto(bias, trend_strength, range_position)
 
     @staticmethod
     def bias_for_fresh(trend_strength: float) -> int:
@@ -68,6 +79,15 @@ class ContextualPolicy:
         if trend_strength <= -BIAS_ENTER:
             return -1
         return 0
+
+    @staticmethod
+    def _structure_veto(bias: int, trend: float, range_position: float) -> int:
+        """Demote a with-trend bias that would enter at range exhaustion."""
+        if bias > 0 and range_position >= RANGE_HIGH and trend < BREAKOUT_TREND:
+            return 0
+        if bias < 0 and range_position <= RANGE_LOW and trend > -BREAKOUT_TREND:
+            return 0
+        return bias
 
     def propose(
         self,
@@ -93,8 +113,17 @@ class ContextualPolicy:
             spacing = Spacing.GEOMETRIC
             order_size = self.order_size
 
-        lower = mid * (Decimal(1) - half_band)
-        upper = mid * (Decimal(1) + half_band)
+        # Anchored center (live 2026-06-12, LAB ep 2): centering the grid on the
+        # launch price puts a "buy the dip" ladder at the structural top when
+        # price sits at a range extreme. Shift the center toward the window's
+        # midpoint by up to half the band — price always stays inside the band
+        # (the engine only re-centers on band exit), but the ladder leans the
+        # right way: mostly sells when launching high, mostly buys when low.
+        center = mid
+        if regime is not None:
+            center = mid * (Decimal(1) + Decimal(str(0.5 - regime.range_position)) * half_band)
+        lower = center * (Decimal(1) - half_band)
+        upper = center * (Decimal(1) + half_band)
         return GridConfig(
             instance_id=instance_id,
             venue=venue,
@@ -106,7 +135,8 @@ class ContextualPolicy:
             spacing=spacing,
             leverage=leverage,
             policy_version=self.version,
-            bias=self.bias_for(regime.trend_strength) if regime is not None else
+            bias=self.bias_for(regime.trend_strength, range_position=regime.range_position)
+                 if regime is not None else
                  (1 if self.bias_mode == "long" else -1 if self.bias_mode == "short" else 0),
         )
 

@@ -89,12 +89,23 @@ async def classify_regime(exchange, market: str, signals: list | None = None) ->
     # slowly-grinding markets, so the old both-zero gate skipped this read and the
     # grid stayed symmetric against a 6% grind until the breaker. The venue's own
     # candles are ground truth for trend — the stronger signal (by magnitude) wins.
+    range_position = 0.5
     kl = getattr(exchange, "klines", None)
     if kl is not None:
         try:
-            local_trend, local_vol = local_trend_vol(await kl(market))
+            try:
+                closes = await kl(market, "1", 240)  # 4h of structure when the venue allows
+            except TypeError:                        # ports with a (market)-only signature
+                closes = await kl(market)
+            local_trend, local_vol = local_trend_vol(closes)
             trend = max(trend, local_trend, key=abs)
             realized_vol = max(realized_vol, local_vol)
+            # Where does the CURRENT price sit in the window's band? Launching
+            # with center=price at a range extreme is how "buy the dip" buys
+            # the structural top (live 2026-06-12, LAB ep 2).
+            px = [float(c) for c in closes if float(c) > 0]
+            if px and max(px) > min(px):
+                range_position = (px[-1] - min(px)) / (max(px) - min(px))
         except Exception:  # noqa: BLE001 — a fallback must never sink the loop
             pass
 
@@ -106,4 +117,5 @@ async def classify_regime(exchange, market: str, signals: list | None = None) ->
         volume_z=vol_z,
         smart_money_flow=smart_money,
         social_momentum=social,
+        range_position=range_position,
     )

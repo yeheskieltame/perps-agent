@@ -110,6 +110,11 @@ class RegimeFingerprint:
     volume_z: float
     smart_money_flow: float = 0.0  # Nansen
     social_momentum: float = 0.0  # Elfa
+    # Where the current price sits inside the recent kline window's high-low band
+    # (0 = at the lows, 1 = at the highs, 0.5 = mid / unknown). Launching a grid
+    # without this is how a "buy the dip" ladder ends up buying the structural
+    # top (live 2026-06-12, LABUSDT ep 2).
+    range_position: float = 0.5
 
 
 @dataclass

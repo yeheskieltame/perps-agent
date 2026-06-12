@@ -22,7 +22,7 @@ from ..domain.grid import (
 )
 from ..domain.models import EpisodeOutcome, Fill, GridConfig, GridState, Order, Side
 from ..domain.pnl import risk_adjusted
-from .safety import CircuitBreaker, ProfitGuard
+from .safety import AccountGuard, CircuitBreaker, ProfitGuard
 
 
 class GridEngine:
@@ -35,14 +35,18 @@ class GridEngine:
     THESIS_ER = 0.3        # signed efficiency ratio that counts as "directional"
     THESIS_CAP_FRAC = 0.9  # "at the cap" = within 90% (partials can stop short)
 
+    ACCOUNT_CHECK_EVERY = 4  # monitor ticks between equity reads (~1/min at 15s ticks)
+
     def __init__(self, exchange, cfg: GridConfig, store=None, breaker: CircuitBreaker | None = None,
                  monitor_interval: float = 0.0, profit_guard: ProfitGuard | None = None,
-                 bias_fn=None) -> None:
+                 bias_fn=None, account_guard: AccountGuard | None = None) -> None:
         self.ex = exchange
         self.cfg = cfg
         self.store = store
         self.breaker = breaker
         self.profit_guard = profit_guard
+        self.account_guard = account_guard
+        self._guard_tick = 0  # throttles the account-equity read in the monitor
         self.monitor_interval = monitor_interval  # seconds; <=0 disables re-center/monitor
         # Grid mode (see domain/grid.py build_grid_orders): starts at the committed
         # cfg.bias; an optional async `bias_fn(current_bias) -> int` re-evaluates the
@@ -83,6 +87,11 @@ class GridEngine:
             await self.ex.set_leverage(self.cfg.market, self.cfg.leverage)  # enforce user choice
         except Exception as e:  # noqa: BLE001 — leverage is best-effort, never block trading
             print(f"  ! set_leverage({self.cfg.leverage}x) failed: {e}")
+        if self.account_guard is not None and self.account_guard.max_drop > 0:
+            try:
+                self.account_guard.arm((await self.ex.balance()).equity)
+            except Exception as e:  # noqa: BLE001 — unarmed guard fails open; breaker still caps the episode
+                print(f"  ! account guard could not read start equity ({e}) — guard inactive")
         bid, ask = await self.ex.best_bid_ask(self.cfg.market)
         mid = (bid + ask) / 2
         self.center = mid
@@ -150,12 +159,33 @@ class GridEngine:
         await self._check_guards(mid)
         if self.state is not GridState.RUNNING:
             return False
+        if await self._account_break(mid):
+            return False
         if await self._thesis_break():
             return False
         if self.lower <= mid <= self.upper:
             return False
         await self._recenter(mid)
         return True
+
+    async def _account_break(self, mark: Decimal) -> bool:
+        """Account-level kill-switch: wallet equity (ALL markets, all episodes)
+        dropped past the guard's cap -> exit this grid. Equity is read every
+        ACCOUNT_CHECK_EVERY ticks to keep the monitor light on the venue API."""
+        if self.account_guard is None or self.account_guard.max_drop <= 0:
+            return False
+        self._guard_tick += 1
+        if self._guard_tick % self.ACCOUNT_CHECK_EVERY != 1:
+            return False
+        try:
+            equity = (await self.ex.balance()).equity
+        except Exception:  # noqa: BLE001 — a failed read must not kill the monitor
+            return False
+        reason = self.account_guard.check(equity)
+        if reason:
+            await self._exit(reason, "account-guard", mark)
+            return True
+        return False
 
     async def _thesis_break(self) -> bool:
         """Exit early when capped inventory faces a one-directional grind (see the

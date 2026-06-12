@@ -89,3 +89,40 @@ class ProfitGuard:
         self.tripped = True
         self.reason = reason
         return reason
+
+
+@dataclass
+class AccountGuard:
+    """Account-level kill-switch (trader risk framework, 2026-06-12). The
+    CircuitBreaker caps ONE episode's loss; wallet equity can still bleed
+    across episodes and markets. This guard arms with the wallet equity at
+    episode start and trips once live equity has dropped more than `max_drop`
+    (quote units) below it — across ALL activity on the account, not just this
+    grid. Per-process by design; the cross-day embargo ("no new grids for
+    24h") is an operator decision the trip reason points at.
+
+    max_drop <= 0 disables the guard. An unarmed guard (start equity never
+    read) never trips — fail-open is correct here because the breaker still
+    caps the episode itself."""
+
+    max_drop: Decimal = Decimal(0)
+    start_equity: Decimal | None = None
+    tripped: bool = False
+    reason: str = ""
+
+    def arm(self, equity: Decimal) -> None:
+        if self.start_equity is None:
+            self.start_equity = equity
+
+    def check(self, equity: Decimal) -> str | None:
+        if self.tripped:
+            return self.reason
+        if self.max_drop <= 0 or self.start_equity is None:
+            return None
+        drop = self.start_equity - equity
+        if drop > self.max_drop:
+            self.tripped = True
+            self.reason = (f"account equity -{drop} from {self.start_equity} "
+                           f"(> cap {self.max_drop}) — stop, review before relaunching")
+            return self.reason
+        return None

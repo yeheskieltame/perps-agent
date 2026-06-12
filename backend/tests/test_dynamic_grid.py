@@ -317,3 +317,25 @@ async def test_recenter_near_cap_thins_to_remaining_room():
     assert len(sells) == 1
     all_mine = [o for o in await ex.open_orders("BTCUSDT") if o.instance_id == "t-1"]
     assert min(s.price for s in sells) == min(o.price for o in all_mine if o.side is Side.SELL)
+
+
+async def test_thesis_break_catches_a_fast_dump_inside_a_mixed_window():
+    """Live 2026-06-12 (LAB ep 2): a 3.5%/30min dump diluted to ER < 0.3 over the
+    full 1h window because the preceding rally offset it — the breaker paid the
+    difference. The recent-half window must catch it."""
+    from perpsagent.domain.models import GridState
+
+    class RallyThenDump(FakeExchange):
+        async def klines(self, market, interval="1", limit=60):
+            up = [Decimal(100) + Decimal("0.2") * i for i in range(30)]     # 100 -> 105.8
+            down = [Decimal("105.8") - Decimal("0.2") * i for i in range(1, 31)]  # -> 99.8
+            return up + down                       # full-window ER ~ 0 (round trip)
+
+    ex = RallyThenDump({"mid": "100", "tick": "0.1"})
+    eng = GridEngine(ex, _cfg(), breaker=CircuitBreaker(max_inventory=Decimal("0.03")))
+    eng._exit_retry_delay = 0
+    await eng.start()
+    eng.pos_qty = Decimal("0.03")                  # long at the cap into the dump
+    eng.pos_avg = Decimal("104")
+    assert await eng._thesis_break() is True
+    assert eng.state is GridState.HALTED and eng.exit_kind == "thesis-break"

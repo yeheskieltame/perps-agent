@@ -17,6 +17,7 @@ import signal
 from decimal import Decimal
 
 from .agent.decide import ContextualPolicy
+from .agent.gates import LaunchGated, parse_news_events
 from .agent.loop import LearningLoop
 from .app.manager import GridManager
 from .app.safety import CircuitBreaker, ProfitGuard
@@ -100,12 +101,17 @@ async def run(mode: str, market: str, venue_choice: str, leverage: Decimal = Dec
                               pin_band=pin_band, pin_levels=pin_levels, pin_order_size=pin_order_size,
                               bias_mode=bias_mode)
     loop = LearningLoop(ex, chain, GridManager(), policy=policy, signals=signals, venue=venue, store=store,
-                        breaker=breaker, recenter_interval=monitor_interval, profit_guard=profit_guard)
+                        breaker=breaker, recenter_interval=monitor_interval, profit_guard=profit_guard,
+                        news_events=parse_news_events(s.news_events))
     recovered = await loop.recover()
     if recovered:
         print(f"[{mode}] recovered {len(recovered)} open instance(s) from store")
 
-    iid, cfg, tx = await loop.plan_and_launch(market, leverage=leverage)
+    try:
+        iid, cfg, tx = await loop.plan_and_launch(market, leverage=leverage)
+    except LaunchGated as e:
+        print(f"[{mode}] launch gated — NOT deploying: {e.reason}")
+        return
     rc = f"every {monitor_interval:g}s" if monitor_interval > 0 else "off"
     cap = breaker.max_inventory if breaker else "-"
     pg = (f"tp={profit_guard.take_profit} trail={profit_guard.trail_frac}"

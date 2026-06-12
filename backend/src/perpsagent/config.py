@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     surf_api_key: str = ""
     surf_base_url: str = "https://api.asksurf.ai/gateway/v1"
 
+    # Scheduled macro events (CPI/FOMC/NFP), comma-separated ISO timestamps.
+    # Launches inside [-30m, +90m] of an event are gated (agent/gates.py) —
+    # the calendar is entered manually each week; the mechanism is automatic.
+    news_events: str = ""
+
     store_db_path: str = "perpsagent.db"
     postgres_dsn: str = ""        # durable multi-tenant store; empty = use SQLite (store_db_path)
     cred_master_key: str = ""     # Fernet key for encrypting per-user venue keys (never commit/log)

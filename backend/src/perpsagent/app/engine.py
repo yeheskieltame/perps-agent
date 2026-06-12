@@ -182,7 +182,7 @@ class GridEngine:
         against = (net > 0 and er <= -self.THESIS_ER) or (net < 0 and er >= self.THESIS_ER)
         if against:
             await self._exit(f"thesis break: efficiency {er:+.2f} against {net} "
-                             f"inventory at cap", "thesis-break")
+                             f"inventory at cap", "thesis-break", Decimal(str(closes[-1])))
         return against
 
     async def _recenter(self, new_mid: Decimal) -> None:
@@ -309,14 +309,14 @@ class GridEngine:
         if self.breaker is not None:
             reason = self.breaker.check(self.net_inventory(), pnl)
             if reason:
-                await self._exit(reason, "circuit-breaker")
+                await self._exit(reason, "circuit-breaker", mark)
                 return
         if self.profit_guard is not None and mark is not None:
             reason = self.profit_guard.check(pnl)
             if reason:
-                await self._exit(reason, "profit-lock")
+                await self._exit(reason, "profit-lock", mark)
 
-    async def _exit(self, reason: str, kind: str) -> None:
+    async def _exit(self, reason: str, kind: str, mark: Decimal | None = None) -> None:
         """Emergency/profit exit: stop the grid, cancel everything, flatten."""
         if self.state is GridState.HALTED:
             return
@@ -326,9 +326,26 @@ class GridEngine:
         self._resting.clear()
         print(f"  !! {kind}: {reason} — cancel_all + flatten")
         await self._retry_exit_step("cancel_all", self.ex.cancel_all)
-        await self._retry_exit_step("flatten", self.ex.flatten)
+        if await self._retry_exit_step("flatten", self.ex.flatten):
+            self._realize_exit(mark)
 
-    async def _retry_exit_step(self, what: str, op, attempts: int = 3) -> None:
+    def _realize_exit(self, mark: Decimal | None) -> None:
+        """Book a flatten into realized PnL. The engine's number must match the
+        venue's: live 2026-06-11 a breaker flatten cost -0.354 that outcome()
+        never saw, so the episode attested 'winrate 100% pnl +0.23' while the
+        account lost money. Priced at the mark that triggered the exit — the
+        venue's taker fill differs by slippage only."""
+        if self.pos_qty == 0:
+            return
+        if mark is None:
+            print(f"  ! flatten not priced — realized PnL excludes the last "
+                  f"{self.pos_qty} position")
+            self.pos_qty, self.pos_avg = Decimal(0), Decimal(0)
+            return
+        side = Side.SELL if self.pos_qty > 0 else Side.BUY
+        self._apply_fill(side, mark, abs(self.pos_qty))
+
+    async def _retry_exit_step(self, what: str, op, attempts: int = 3) -> bool:
         """An exit step MUST land: once HALTED the monitor stops, so a tripped
         breaker with a live position is unsupervised risk. Retry with backoff;
         shout if the venue still refuses — that needs a human."""
@@ -336,7 +353,7 @@ class GridEngine:
         for attempt in range(1, attempts + 1):
             try:
                 await op(self.cfg.market)
-                return
+                return True
             except Exception as e:  # noqa: BLE001
                 print(f"    {what} failed (attempt {attempt}/{attempts}): {e}")
                 if attempt < attempts:
@@ -344,6 +361,7 @@ class GridEngine:
                     delay *= 2
         print(f"  !!! {what} did not land after {attempts} attempts — "
               f"POSITION MAY STILL BE OPEN on {self.cfg.market}; close it manually")
+        return False
 
     async def handle_fill(self, fill: Fill) -> Order | None:
         if fill.instance_id != self.cfg.instance_id:
@@ -432,7 +450,31 @@ class GridEngine:
     async def stop(self) -> None:
         self.state = GridState.EXITING
         await self._cancel_own()  # instance-scoped: never wipes a sibling grid
+        await self._close_flat()
         self.state = GridState.HALTED
+
+    async def _close_flat(self) -> None:
+        """A graceful close must not leave an unsupervised position behind (live
+        2026-06-10: 99 MNT long survived a close with ZERO take-profit orders).
+        Flatten and book the exit at the current mid so the attested PnL
+        includes it. A guard exit that landed has already flattened and realized
+        (pos_qty 0); a guard flatten that FAILED leaves pos_qty set, and this is
+        the retry that catches it."""
+        if self.pos_qty == 0:
+            return
+        mark: Decimal | None = None
+        try:
+            bid, ask = await self.ex.best_bid_ask(self.cfg.market)
+            mark = (bid + ask) / 2
+        except Exception:  # noqa: BLE001 — flatten anyway; the exit just goes unpriced
+            pass
+        try:
+            await self.ex.flatten(self.cfg.market)
+        except Exception as e:  # noqa: BLE001
+            print(f"  !!! close flatten failed — POSITION MAY STILL BE OPEN on "
+                  f"{self.cfg.market}: {e}")
+            return
+        self._realize_exit(mark)
 
     @property
     def winrate(self) -> float:

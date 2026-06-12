@@ -20,7 +20,7 @@ from .agent.decide import ContextualPolicy
 from .agent.gates import LaunchGated, parse_news_events
 from .agent.loop import LearningLoop
 from .app.manager import GridManager
-from .app.safety import CircuitBreaker, ProfitGuard
+from .app.safety import AccountGuard, CircuitBreaker, ProfitGuard
 from .config import Settings
 from .domain.models import Venue
 
@@ -81,7 +81,7 @@ async def run(mode: str, market: str, venue_choice: str, leverage: Decimal = Dec
               band: str = "0.01", levels: int = 10, order_size: str = "0.01",
               take_profit: str = "0", trail: str = "0", trail_arm: str = "0",
               pin_band: bool = False, pin_levels: bool = False, pin_order_size: bool = False,
-              bias_mode: str = "auto") -> None:
+              bias_mode: str = "auto", account_drawdown: str = "0") -> None:
     s = Settings()
     s.assert_consistent()
     ex, chain, venue, signals, store = _build(s, mode, venue_choice)
@@ -89,11 +89,14 @@ async def run(mode: str, market: str, venue_choice: str, leverage: Decimal = Dec
     # Guards + re-center are live-only (the dry demo drives price by hand).
     breaker = None
     profit_guard = None
+    account_guard = None
     monitor_interval = 0.0
     if mode == "live":
         breaker = CircuitBreaker(max_inventory=Decimal(max_inventory), max_drawdown=Decimal(max_drawdown))
         profit_guard = ProfitGuard(take_profit=Decimal(take_profit), trail_frac=Decimal(trail),
                                    trail_arm=Decimal(trail_arm))
+        if Decimal(account_drawdown) > 0:
+            account_guard = AccountGuard(max_drop=Decimal(account_drawdown))
         monitor_interval = recenter_interval
 
     # Tunable grid shape (used when on-chain recall has no verified episode yet).
@@ -102,7 +105,7 @@ async def run(mode: str, market: str, venue_choice: str, leverage: Decimal = Dec
                               bias_mode=bias_mode)
     loop = LearningLoop(ex, chain, GridManager(), policy=policy, signals=signals, venue=venue, store=store,
                         breaker=breaker, recenter_interval=monitor_interval, profit_guard=profit_guard,
-                        news_events=parse_news_events(s.news_events))
+                        news_events=parse_news_events(s.news_events), account_guard=account_guard)
     recovered = await loop.recover()
     if recovered:
         print(f"[{mode}] recovered {len(recovered)} open instance(s) from store")
@@ -164,6 +167,9 @@ def main() -> None:
                     help="live re-center cadence in seconds; 0 disables (default: .env or 15)")
     ap.add_argument("--max-inventory", default=None, help="circuit-breaker net-position cap; 0 = auto from grid size")
     ap.add_argument("--max-drawdown", default=None, help="circuit-breaker loss cap in quote units; 0 = disabled")
+    ap.add_argument("--account-drawdown", default=None,
+                    help="account-level kill-switch: exit when WALLET equity drops this many quote "
+                         "units below its episode-start level (all markets count); 0 = disabled")
     ap.add_argument("--band", default=None, help="grid half-band fraction of mid, e.g. 0.008 = +/-0.8 pct (default 0.01)")
     ap.add_argument("--levels", type=int, default=None, help="number of grid levels (default 10)")
     ap.add_argument("--order-size", default=None, help="base qty per level, e.g. 0.005 (default 0.01)")
@@ -186,10 +192,11 @@ def main() -> None:
     take_profit = args.take_profit if args.take_profit is not None else "0"
     trail = args.trail if args.trail is not None else "0"
     trail_arm = args.trail_arm if args.trail_arm is not None else "0"
+    acct_dd = args.account_drawdown if args.account_drawdown is not None else s.account_drawdown
     asyncio.run(run(args.mode, args.market, args.venue, leverage, recenter, max_inv, max_dd,
                     band, levels, order_size, take_profit, trail, trail_arm,
                     args.band is not None, args.levels is not None, args.order_size is not None,
-                    args.bias))
+                    args.bias, acct_dd))
 
 
 if __name__ == "__main__":

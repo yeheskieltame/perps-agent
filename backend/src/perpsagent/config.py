@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     recenter_interval_s: float = 15.0  # live re-center supervisor cadence in seconds (0 disables)
     max_inventory: str = "0"           # circuit-breaker net-position cap (0 = auto from grid size)
     max_drawdown: str = "0"            # circuit-breaker loss cap in quote units (0 = disabled)
+    account_drawdown: str = "0"        # account-level kill-switch: wallet-equity drop cap in quote units (0 = disabled)
 
     # Mantle chain + deployed contracts
     mantle_rpc: str = ""

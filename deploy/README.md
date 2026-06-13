@@ -83,6 +83,29 @@ Health check (from the VPS): `curl http://127.0.0.1:9000/healthz` → `{"ok":tru
 
 ---
 
+## Hackathon submission readiness — verify each component on testnet
+
+Fill these in `backend/.env` for the full concept (commit/attest/learn + signals):
+`PERPSAGENT_MANTLE_PRIVATE_KEY`, the 3 contract addresses, and the signal keys
+(`PERPSAGENT_ELFA_API_KEY`, `…_NANSEN_…`, `…_SURF_…`). Then `systemctl restart
+perpsagent-worker perpsbot` and check each leg:
+
+| Component | How to verify it works | Pass signal |
+|---|---|---|
+| Telegram product | `/start` → `/connect` (testnet) → `/grid BTCUSDT` | dashboard + grid `RUNNING` |
+| **On-chain COMMIT** | the `/grid` reply shows **⛓ committed on-chain · tx …** | tx confirms on https://sepolia.mantlescan.xyz |
+| **On-chain ATTEST + LEARN** | `/stop` the grid → reply shows **⛓ outcome attested on-chain** | attest + StrategyMemory `write` txs confirm |
+| **Signals (SENSE)** | with signal keys set, launch a grid; worker log shows fused regime (vol/funding/social/smart-money) | no `signal … skipped` for configured ones |
+| **x402 alpha API** | enable `perpsagent-alpha`; `curl -i http://HOST:8402/v1/alpha/recall/BTCUSDT` | **HTTP 402** + `PaymentRequirements`; paid call → 200 with verified episodes |
+| **Builder fee** | set `PERPSAGENT_BUILDER_FEE>0` + `FEE_ASSET`, deposit a bond into the Vault, close a grid | `FeeSettled` event on the Vault |
+
+> The verifiable loop signs every proof with the **operator** wallet (one signer,
+> race-free nonce lane); users stay non-custodial on their own Bybit keys. Without
+> the Mantle key/addresses the worker still runs — it just writes no proofs (the
+> `⛓` lines simply don't appear).
+
+---
+
 ## Day-2 operations
 
 ```bash

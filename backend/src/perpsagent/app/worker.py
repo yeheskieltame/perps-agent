@@ -27,9 +27,10 @@ API (user identified by the `X-User-Id` header):
 
 A request for a user this shard does not own returns 409 (the gateway should never
 send one — this is defense-in-depth). A user with no stored venue keys gets 401 on
-any endpoint that needs their exchange client. SKETCH: no auth on X-User-Id, and
-grids run through the GridService facade directly (the verifiable LearningLoop
-commit/attest is a follow-up); see TODOs.
+any endpoint that needs their exchange client. The verifiable loop runs through the
+GridService facade: launch COMMITs the config hash on-chain before trading, stop
+ATTESTs the outcome + writes StrategyMemory (see app/service.py). SKETCH: still no
+auth on X-User-Id — the gateway is expected to authenticate; see TODOs.
 """
 from __future__ import annotations
 

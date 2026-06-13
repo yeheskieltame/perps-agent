@@ -11,6 +11,12 @@
 Implementations source-verified; record in `contracts/deployments/mantle-sepolia.json`.
 Explorer: https://sepolia.mantlescan.xyz
 
+## Host the product on a VPS
+
+Worker + Telegram bot as two systemd services, state in local Postgres, bot on
+long-polling (no domain/TLS needed). One command on the box:
+`sudo bash deploy/setup-vps.sh`. Full guide: [`deploy/README.md`](deploy/README.md).
+
 ## Prereqs
 
 - Foundry (`curl -L https://foundry.paradigm.xyz | bash && foundryup`)

@@ -1,0 +1,29 @@
+[Unit]
+# Perps Agent — engine worker: serves the GridService facade over HTTP (loopback).
+# Owns trading sessions, fill streams, per-user encrypted Bybit clients.
+Description=Perps Agent engine worker (GridService HTTP API)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=perps
+Group=perps
+# Reads its config from ./.env (pydantic-settings) — keep secrets here, not in this unit.
+WorkingDirectory=/opt/perps-agent/backend
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/perps-agent/backend/.venv/bin/python -m perpsagent.app.worker
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+
+# --- hardening (the API binds 127.0.0.1 and is reached only by the local bot) ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

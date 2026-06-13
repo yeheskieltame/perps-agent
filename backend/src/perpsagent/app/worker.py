@@ -298,8 +298,8 @@ def main() -> None:
 
     app = build_worker_app(service, s.shard_node, creds=creds_admin)
     app.on_startup.append(_startup)
-    print(f"[worker {s.shard_node}/{s.shard_count}] serving on :{s.worker_port}")
-    web.run_app(app, port=s.worker_port)
+    print(f"[worker {s.shard_node}/{s.shard_count}] serving on {s.worker_host}:{s.worker_port}")
+    web.run_app(app, host=s.worker_host, port=s.worker_port)
 
 
 if __name__ == "__main__":

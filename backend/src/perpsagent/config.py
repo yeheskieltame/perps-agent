@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     shard_node: str = "0"         # this worker's node id (must be one of the shard set)
     shard_count: int = 1          # number of shards (worker builds ShardRouter(shard_count))
     worker_port: int = 9000       # this worker's HTTP port
+    worker_host: str = "127.0.0.1"  # bind address; localhost-only by default — the worker API is
+                                    # UNAUTHENTICATED, so never expose it publicly. Set 0.0.0.0 only
+                                    # for a multi-host gateway deploy behind a firewall/private net.
     gateway_port: int = 8080      # gateway HTTP port
     shard_urls: str = ""          # gateway routing map, JSON {"0":"http://host:9000", ...}
 

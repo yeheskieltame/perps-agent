@@ -1,0 +1,30 @@
+[Unit]
+# Perps Agent — Telegram bot (product UI). Long-polls Telegram; talks to the worker
+# over loopback (PERPSBOT_API_URL=http://127.0.0.1:9000). No inbound port needed.
+Description=Perps Agent Telegram bot
+# Soft ordering only — the bot retries the worker on its own, so no hard dependency.
+After=network-online.target perpsagent-worker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=perps
+Group=perps
+# Reads its config from ./.env (pydantic-settings): PERPSBOT_TOKEN, API_URL, allowlist.
+WorkingDirectory=/opt/perps-agent/frontend/telegram
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/perps-agent/frontend/telegram/.venv/bin/python -m perpsbot.main
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+
+# --- hardening ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

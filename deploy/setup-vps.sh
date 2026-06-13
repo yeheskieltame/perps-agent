@@ -115,7 +115,7 @@ ensure_env PERPSAGENT_WORKER_HOST 127.0.0.1 "$BACKEND_DIR/.env"
 
 # ---- 7. systemd units --------------------------------------------------------
 log "Installing systemd units (substituting paths/user)…"
-for unit in perpsagent-worker perpsbot; do
+for unit in perpsagent-worker perpsbot perpsagent-alpha; do
   sed -e "s#/opt/perps-agent#${APP_DIR}#g" \
       -e "s#^User=perps#User=${APP_USER}#" \
       -e "s#^Group=perps#Group=${APP_USER}#" \
@@ -140,7 +140,13 @@ Next — fill the secrets the script cannot generate, then start the services:
        journalctl -u perpsagent-worker -f      # logs
        journalctl -u perpsbot -f
 
-  4. After editing any .env later:  sudo systemctl restart perpsagent-worker perpsbot
+  4. (optional) x402 alpha API — sells verified StrategyMemory per call:
+       # set PERPSAGENT_X402_* in backend/.env first, then:
+       sudo systemctl enable --now perpsagent-alpha
+       sudo ufw allow 8402/tcp                  # this one IS public (payment-gated)
+       curl -i http://127.0.0.1:8402/v1/alpha/recall/BTCUSDT   # expect HTTP 402
+
+  5. After editing any .env later:  sudo systemctl restart perpsagent-worker perpsbot
 
 Firewall (recommended): the worker binds 127.0.0.1 only, but lock the box down anyway:
        sudo ufw allow OpenSSH && sudo ufw enable

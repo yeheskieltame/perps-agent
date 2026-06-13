@@ -1,0 +1,31 @@
+[Unit]
+# Perps Agent — x402 alpha API. Sells verified intelligence per call: the current
+# fused regime + the best VERIFIED StrategyMemory episodes (monetization #2). Unpaid
+# requests get HTTP 402 + PaymentRequirements; pay with an EIP-3009 USDC authorization.
+# Unlike the worker, this IS meant to be public — open its port in the firewall.
+Description=Perps Agent x402 alpha API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=perps
+Group=perps
+# Reads config from backend/.env (PERPSAGENT_X402_*, PERPSAGENT_ALPHA_PORT, Mantle addrs).
+WorkingDirectory=/opt/perps-agent/backend
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/perps-agent/backend/.venv/bin/python -m perpsagent.app.alpha_api
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+
+# --- hardening ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectControlGroups=true
+ProtectKernelTunables=true
+RestrictSUIDSGID=true
+
+[Install]
+WantedBy=multi-user.target

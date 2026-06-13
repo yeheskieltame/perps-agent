@@ -100,10 +100,60 @@ def build_app(gateway: X402Gateway, exchange, chain, signals: list | None = None
     return app
 
 
-def main() -> None:
-    """Dev mode: serves on fakes so the 402 flow is demoable without any keys."""
+def _alpha_chain(s):
+    """Read side of the verifiable brain. A real MantleChainClient when the Memory
+    contract is configured — `recall` then serves VERIFIED on-chain episodes — else
+    an in-memory MemoryChain (demo). The alpha API only reads (no signing), so it
+    shares the operator key purely for construction; it issues no transactions."""
+    if s.mantle_rpc and s.mantle_private_key and s.strategy_memory_addr:
+        from ..adapters.chain.client import MantleChainClient
+
+        return MantleChainClient(
+            rpc_url=s.mantle_rpc, private_key=s.mantle_private_key,
+            ledger_addr=s.strategy_ledger_addr or ("0x" + "00" * 20),
+            memory_addr=s.strategy_memory_addr, vault_addr=s.vault_addr or None,
+            detail_path=s.memory_detail_path or None,
+        )
     from ..adapters.chain.memory_chain import MemoryChain
+
+    return MemoryChain()
+
+
+def _alpha_exchange(s):
+    """Microstructure source for the regime fingerprint. Operator Bybit keys when
+    set, else a FakeExchange so the server always starts (recall stays real even
+    when regime is demo-quality)."""
+    if s.bybit_api_key and s.bybit_api_secret:
+        from ..adapters.exchanges.bybit.adapter import BybitExchange
+
+        return BybitExchange({"api_key": s.bybit_api_key, "api_secret": s.bybit_api_secret,
+                              "testnet": s.bybit_testnet, "rate_limit": s.bybit_rate_limit,
+                              "max_retries": s.bybit_max_retries})
     from ..adapters.exchanges.fake import FakeExchange
+
+    return FakeExchange({"mid": "100"})
+
+
+def _alpha_signals(s) -> list:
+    signals: list = []
+    if s.elfa_api_key:
+        from ..adapters.signals.elfa import ElfaSignals
+
+        signals.append(ElfaSignals({"api_key": s.elfa_api_key}))
+    if s.nansen_api_key:
+        from ..adapters.signals.nansen import NansenSignals
+
+        signals.append(NansenSignals({"api_key": s.nansen_api_key}))
+    if s.surf_api_key:
+        from ..adapters.signals.surf import SurfSignals
+
+        signals.append(SurfSignals({"api_key": s.surf_api_key, "base_url": s.surf_base_url}))
+    return signals
+
+
+def main() -> None:
+    """Serve the x402-gated alpha API. Uses the real chain/exchange/signals when
+    configured (production), else fakes so the 402 flow is demoable without keys."""
     from ..config import Settings
 
     s = Settings()
@@ -120,7 +170,11 @@ def main() -> None:
         from ..adapters.cache.redis_cache import RedisCache
 
         cache = RedisCache(s.redis_url, s.alpha_cache_ttl_s)
-    web.run_app(build_app(gateway, FakeExchange({"mid": "100"}), MemoryChain(),
+    chain = _alpha_chain(s)
+    live = type(chain).__name__ == "MantleChainClient"
+    print(f"[alpha] serving on :{s.alpha_port}  recall={'on-chain' if live else 'in-memory'} · "
+          f"settle={'facilitator' if s.x402_facilitator_url else 'local-verify'}")
+    web.run_app(build_app(gateway, _alpha_exchange(s), chain, signals=_alpha_signals(s),
                           cache_ttl=s.alpha_cache_ttl_s, cache=cache), port=s.alpha_port)
 
 

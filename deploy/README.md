@@ -4,8 +4,9 @@ Production layout for a single VPS (Ubuntu/Debian). Two long-running services:
 
 | Service | What | Port |
 |---|---|---|
-| `perpsagent-worker` | engine — `GridService` HTTP API; owns sessions, fill streams, per-user encrypted Bybit clients | `127.0.0.1:9000` (loopback only) |
+| `perpsagent-worker` | engine — `GridService` HTTP API; owns sessions, fill streams, per-user encrypted Bybit clients; runs the verifiable loop (commit/attest on Mantle) | `127.0.0.1:9000` (loopback only) |
 | `perpsbot` | Telegram bot (product UI) — long-polls Telegram, calls the worker over loopback | — (no inbound port) |
+| `perpsagent-alpha` *(optional)* | x402 alpha API — sells verified `StrategyMemory` per call (HTTP 402 + EIP-3009 USDC) | `:8402` (public — payment-gated) |
 
 State + Fernet-encrypted Bybit keys live in **Postgres** (local). The bot uses
 **long-polling**, so there is **no inbound webhook** — no domain, nginx, or TLS

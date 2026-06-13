@@ -50,6 +50,7 @@ MANTLE_EXPLORER = "https://sepolia.mantlescan.xyz"
 
 
 def _tx_link(tx: str, label: str) -> str:
+    tx = tx if tx.startswith("0x") else "0x" + tx          # explorers want the 0x prefix
     short = f"{tx[:10]}…{tx[-6:]}" if len(tx) > 18 else tx
     return f'<a href="{MANTLE_EXPLORER}/tx/{tx}">{label} {short}</a>'
 

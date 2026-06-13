@@ -43,6 +43,22 @@ CONNECT_CANCELLED = "✖️ Cancelled — nothing was stored."
 _STATE_ICON = {"RUNNING": "🟢", "REBALANCING": "🔄", "HALTED": "🔴",
                "EXITING": "🟠", "INITIALIZING": "⏳"}
 
+# Mantle Sepolia explorer — the verifiable side of the product. The bot shows the
+# proof tx so the on-chain commit/attest is visible right in the chat (the backend
+# owns the chain; this is display only).
+MANTLE_EXPLORER = "https://sepolia.mantlescan.xyz"
+
+
+def _tx_link(tx: str, label: str) -> str:
+    short = f"{tx[:10]}…{tx[-6:]}" if len(tx) > 18 else tx
+    return f'<a href="{MANTLE_EXPLORER}/tx/{tx}">{label} {short}</a>'
+
+
+def _proof_line(proofs: dict | None, kind: str, prefix: str) -> str:
+    """One on-chain proof line, or '' when proofs are absent (chain disabled)."""
+    tx = (proofs or {}).get(kind)
+    return f"\n{prefix} · {_tx_link(tx, 'tx')}" if tx else ""
+
 
 def _err(e: ApiError) -> str:
     if e.status == 401:
@@ -173,15 +189,18 @@ async def launch_note(api, user_id: int, market: str) -> str:
     eff = resp.get("effective", {})
     return (f"✅ Launched <code>{resp['instance_id']}</code> — "
             f"{eff.get('levels', '?')} levels · lev {eff.get('leverage', '?')}x · "
-            f"[{resp.get('lower', '?')}, {resp.get('upper', '?')}]")
+            f"[{resp.get('lower', '?')}, {resp.get('upper', '?')}]"
+            + _proof_line(resp.get("proofs"), "commit", "⛓ committed on-chain"))
 
 
 async def stop_note(api, user_id: int, instance_id: str) -> str:
     try:
-        await api.stop(user_id, instance_id)
+        resp = await api.stop(user_id, instance_id)
     except ApiError as e:
         return _err(e)
-    return f"🛑 Stopped <code>{instance_id}</code> — orders cancelled."
+    return (f"🛑 Stopped <code>{instance_id}</code> — orders cancelled."
+            + _proof_line(resp.get("proofs") if isinstance(resp, dict) else None,
+                          "attest", "⛓ outcome attested on-chain"))
 
 
 async def price_toast(api, user_id: int, market: str) -> str:
@@ -291,6 +310,9 @@ async def grid(api, user_id: int, args: str) -> str:
         lines.append(risk + (" · " + " ".join(exits) if exits else " · exit guards off"))
     else:
         lines.append(market)
+    commit = _proof_line(resp.get("proofs"), "commit", "⛓ committed on-chain")
+    if commit:
+        lines.append(commit.lstrip("\n"))
     lines.append(f"Use /status to follow it, /stop <code>{iid}</code> to close.")
     return "\n".join(lines)
 
@@ -315,10 +337,12 @@ async def stop(api, user_id: int, args: str) -> str:
     if not iid:
         return "Usage: <code>/stop INSTANCE</code> (find it via /status)"
     try:
-        await api.stop(user_id, iid)
+        resp = await api.stop(user_id, iid)
     except ApiError as e:
         return _err(e)
-    return f"🛑 Stopped <code>{iid}</code> — orders cancelled."
+    return (f"🛑 Stopped <code>{iid}</code> — orders cancelled."
+            + _proof_line(resp.get("proofs") if isinstance(resp, dict) else None,
+                          "attest", "⛓ outcome attested on-chain"))
 
 
 async def pause(api, user_id: int, args: str) -> str:

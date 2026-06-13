@@ -231,3 +231,38 @@ async def test_401_points_to_connect():
     api.fail = ApiError(401, "no venue credentials — connect your API keys first")
     out = await commands.grid(api, 42, "BTCUSDT")
     assert "/connect" in out and "401" not in out                    # friendly, not raw
+
+
+class ProofAPI(FakeAPI):
+    """Backend with the verifiable loop on-chain — returns commit/attest tx hashes."""
+
+    async def create_grid(self, uid, market, settings=None):
+        resp = await super().create_grid(uid, market, settings)
+        resp["proofs"] = {"commit": "0x" + "ab" * 32}
+        return resp
+
+    async def stop(self, uid, iid):
+        await super().stop(uid, iid)
+        return {"ok": True, "proofs": {"attest": "0x" + "cd" * 32, "memory": "0x" + "ef" * 32}}
+
+
+async def test_launch_shows_onchain_commit_link():
+    api = ProofAPI()
+    out = await commands.grid(api, 42, "BTCUSDT")
+    assert "committed on-chain" in out
+    assert "sepolia.mantlescan.xyz/tx/0x" + "ab" * 32 in out         # clickable proof
+
+    note = await commands.launch_note(api, 42, "BTCUSDT")
+    assert "committed on-chain" in note
+
+
+async def test_stop_shows_onchain_attest_link():
+    api = ProofAPI()
+    out = await commands.stop(api, 42, "BTCUSDT-0-abc123")
+    assert "attested on-chain" in out and "/tx/0x" + "cd" * 32 in out
+
+
+async def test_proofs_absent_when_chain_disabled():
+    api = FakeAPI()                                                   # no proofs in payload
+    out = await commands.grid(api, 42, "BTCUSDT")
+    assert "on-chain" not in out                                     # silent, not broken

@@ -10,7 +10,9 @@ import json
 from dataclasses import dataclass
 from typing import Callable, Protocol, Sequence
 
-from ..domain.models import BalanceView, GridConfig
+from ..agent.learn import to_record
+from ..agent.sense import classify_regime
+from ..domain.models import BalanceView, GridConfig, RegimeFingerprint
 from .session import UserSession
 
 
@@ -61,7 +63,7 @@ class AppService:
 
     def __init__(self, exchange=None, store=None,
                  client_factory: Callable[[int], object] | None = None,
-                 router=None, node=None) -> None:
+                 router=None, node=None, chain=None, signals=None) -> None:
         if exchange is None and client_factory is None:
             raise ValueError("AppService needs an `exchange` or a `client_factory`")
         self._exchange = exchange
@@ -74,6 +76,16 @@ class AppService:
         self._node = str(node) if node is not None else None
         self._sessions: dict[int, UserSession] = {}
         self._prefs: dict[int, dict] = {}  # settings fallback when the store has none
+        # Verifiable Learning Loop (docs/CONCEPT.md §3), behind the GridService seam
+        # so the UI never sees the chain. `chain` is a ChainPort (MantleChainClient
+        # in prod, MemoryChain in tests); None disables proofs (dev/demo). ONE shared
+        # signer for all users — proofs are signed by the operator, not the user
+        # (users stay non-custodial on their own Bybit). `instance_id` is already
+        # namespaced per user/node, so a single nonce lane stays race-free.
+        self._chain = chain
+        self._signals = signals or []
+        self._regimes: dict[str, RegimeFingerprint] = {}  # instance_id -> regime at commit
+        self._proofs: dict[str, dict] = {}  # instance_id -> {commit, attest, memory} tx hashes
 
     def _on_shard(self, user_id: int) -> bool:
         return self._router is None or self._node is None or self._router.owns(user_id, self._node)
@@ -82,10 +94,24 @@ class AppService:
                           monitor_interval: float = 0.0, profit_guard=None,
                           account_guard=None, timeframe: str = "1") -> str:
         session = await self._session(user_id)
+        # SENSE the regime, then COMMIT the config hash on-chain BEFORE any order
+        # rests. Commit-before-trade is what makes the record trustless (params can't
+        # be fitted to results). If the chain is configured, a failed commit aborts
+        # the launch — we never trade an uncommitted strategy.
+        if self._chain is not None:
+            regime = await classify_regime(session.exchange, cfg.market, self._signals,
+                                           timeframe=timeframe)
+            commit_tx = await self._chain.commit_strategy(cfg.instance_id, cfg)
+            self._regimes[cfg.instance_id] = regime
+            self._proofs[cfg.instance_id] = {"commit": commit_tx}
         await session.create(cfg, breaker=breaker, monitor_interval=monitor_interval,
                              profit_guard=profit_guard, account_guard=account_guard,
                              timeframe=timeframe)
         return cfg.instance_id
+
+    def proofs(self, instance_id: str) -> dict:
+        """On-chain tx hashes for an instance: {commit, attest, memory} (subset)."""
+        return dict(self._proofs.get(instance_id, {}))
 
     async def recover(self) -> list[tuple[int, str]]:
         """Rebuild every open grid under its owning user from the store (replays
@@ -102,7 +128,26 @@ class AppService:
         return rebuilt
 
     async def stop_grid(self, user_id: int, instance_id: str) -> None:
-        await self._owning_session(user_id, instance_id).stop(instance_id)
+        session = self._owning_session(user_id, instance_id)
+        engine = session.manager.get(instance_id)  # grab the ref before stop tears it down
+        await session.stop(instance_id)
+        # ATTEST the verified outcome + LEARN (write StrategyMemory). Post-trade writes
+        # are fire-then-confirm in the chain client — they don't block the close path,
+        # and a revert is logged, never raised (mirrors agent/loop.close_and_learn).
+        if self._chain is None or engine is None:
+            return
+        outcome = engine.outcome()
+        try:
+            self._proofs.setdefault(instance_id, {})["attest"] = await self._chain.attest(instance_id, outcome)
+        except Exception as e:  # noqa: BLE001 — one failed write must not break the close
+            print(f"  ! attest failed ({instance_id}): {e}")
+        regime = self._regimes.pop(instance_id, None)
+        if regime is not None:
+            try:
+                self._proofs.setdefault(instance_id, {})["memory"] = await self._chain.write_memory(
+                    to_record(regime, engine.cfg, outcome))
+            except Exception as e:  # noqa: BLE001
+                print(f"  ! write_memory failed ({instance_id}): {e}")
 
     async def pause_grid(self, user_id: int, instance_id: str) -> None:
         self._owning_session(user_id, instance_id).pause(instance_id)
@@ -137,6 +182,12 @@ class AppService:
         session = self._sessions.pop(user_id, None)
         if session is not None:
             await session.aclose()
+
+    async def drain(self) -> None:
+        """Await in-flight on-chain confirmations — call on graceful worker shutdown
+        so fire-then-confirm attest/write_memory txs land before the process exits."""
+        if self._chain is not None and hasattr(self._chain, "drain"):
+            await self._chain.drain()
 
     # ---- per-user strategy settings (validated upstream — app/prefs.py) ----
     # Durable via the store when it has settings methods; in-memory otherwise

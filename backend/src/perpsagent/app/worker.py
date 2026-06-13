@@ -131,7 +131,8 @@ def build_worker_app(service: AppService, node: str, creds=None) -> web.Applicat
         except PermissionError as e:
             raise web.HTTPConflict(reason=str(e)) from None
         return web.json_response({"instance_id": iid, "effective": knobs,
-                                  "lower": str(cfg.lower), "upper": str(cfg.upper)})
+                                  "lower": str(cfg.lower), "upper": str(cfg.upper),
+                                  "proofs": service.proofs(iid)})
 
     async def get_settings(request: web.Request) -> web.Response:
         user_id = _user_id(request)
@@ -158,11 +159,12 @@ def build_worker_app(service: AppService, node: str, creds=None) -> web.Applicat
         return web.json_response({"settings": prefs.merged(None)})
 
     async def stop(request: web.Request) -> web.Response:
+        instance_id = request.match_info["instance_id"]
         try:
-            await service.stop_grid(_user_id(request), request.match_info["instance_id"])
+            await service.stop_grid(_user_id(request), instance_id)
         except PermissionError as e:
             raise web.HTTPConflict(reason=str(e)) from None
-        return web.json_response({"ok": True})
+        return web.json_response({"ok": True, "proofs": service.proofs(instance_id)})
 
     async def pause(request: web.Request) -> web.Response:
         try:
@@ -244,6 +246,40 @@ def build_worker_app(service: AppService, node: str, creds=None) -> web.Applicat
     return app
 
 
+def _chain_from_settings(s):
+    """Real Mantle client when fully configured (RPC + key + ledger + memory addr),
+    else None → proofs disabled (dev/demo). The worker's verifiable loop signs every
+    proof with the OPERATOR wallet; users stay non-custodial on their own venue keys."""
+    if s.mantle_rpc and s.mantle_private_key and s.strategy_ledger_addr and s.strategy_memory_addr:
+        from ..adapters.chain.client import MantleChainClient
+
+        return MantleChainClient(
+            rpc_url=s.mantle_rpc, private_key=s.mantle_private_key,
+            ledger_addr=s.strategy_ledger_addr, memory_addr=s.strategy_memory_addr,
+            vault_addr=s.vault_addr or None, detail_path=s.memory_detail_path or None,
+        )
+    return None
+
+
+def _signals_from_settings(s) -> list:
+    """SENSE inputs — each signal added only when its key is set (regime fails soft
+    to vol-only otherwise). Same fan-out the CLI runner wires."""
+    signals: list = []
+    if s.elfa_api_key:
+        from ..adapters.signals.elfa import ElfaSignals
+
+        signals.append(ElfaSignals({"api_key": s.elfa_api_key}))
+    if s.nansen_api_key:
+        from ..adapters.signals.nansen import NansenSignals
+
+        signals.append(NansenSignals({"api_key": s.nansen_api_key}))
+    if s.surf_api_key:
+        from ..adapters.signals.surf import SurfSignals
+
+        signals.append(SurfSignals({"api_key": s.surf_api_key, "base_url": s.surf_base_url}))
+    return signals
+
+
 def _service_from_settings(s, router, node: str):
     """Wire store + per-user client factory from config. Returns (service, creds_admin).
 
@@ -280,7 +316,9 @@ def _service_from_settings(s, router, node: str):
         from ..adapters.exchanges.fake import FakeExchange
 
         factory = lambda _uid: FakeExchange({"mid": "100", "tick": "0.1"})  # noqa: E731
-    return AppService(store=store, client_factory=factory, router=router, node=node), creds_admin
+    service = AppService(store=store, client_factory=factory, router=router, node=node,
+                         chain=_chain_from_settings(s), signals=_signals_from_settings(s))
+    return service, creds_admin
 
 
 def main() -> None:
@@ -296,8 +334,12 @@ def main() -> None:
         recovered = await service.recover()
         print(f"[worker {s.shard_node}] recovered {len(recovered)} instance(s)")
 
+    async def _cleanup(_app):
+        await service.drain()  # let fire-then-confirm attest/memory writes land
+
     app = build_worker_app(service, s.shard_node, creds=creds_admin)
     app.on_startup.append(_startup)
+    app.on_cleanup.append(_cleanup)
     print(f"[worker {s.shard_node}/{s.shard_count}] serving on {s.worker_host}:{s.worker_port}")
     web.run_app(app, host=s.worker_host, port=s.worker_port)
 

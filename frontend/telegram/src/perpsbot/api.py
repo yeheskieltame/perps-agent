@@ -63,8 +63,10 @@ class WorkerAPI:
     async def status(self, user_id: int) -> list[dict]:
         return await self._req("GET", "/v1/status", user_id)
 
-    async def stop(self, user_id: int, instance_id: str) -> None:
-        await self._req("DELETE", f"/v1/grids/{instance_id}", user_id)
+    async def stop(self, user_id: int, instance_id: str) -> dict:
+        """Stop a grid. Returns {ok, proofs} — proofs carries the attest/memory tx
+        hashes when the backend's verifiable loop is on-chain."""
+        return await self._req("DELETE", f"/v1/grids/{instance_id}", user_id)
 
     async def pause(self, user_id: int, instance_id: str) -> None:
         await self._req("POST", f"/v1/grids/{instance_id}/pause", user_id)

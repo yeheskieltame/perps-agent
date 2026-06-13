@@ -63,6 +63,16 @@ class Settings(BaseSettings):
     gateway_port: int = 8080      # gateway HTTP port
     shard_urls: str = ""          # gateway routing map, JSON {"0":"http://host:9000", ...}
 
+    # Builder fee (monetization #1, docs/CONCEPT.md §7). A flat fee settled ON-CHAIN
+    # from the operator's Vault bond to the treasury on each closed episode — "charge
+    # for the system, not for PnL". Atomic units of fee_asset (USDC 6dp: 10000 = $0.01).
+    # 0 = disabled. Requires the operator to hold FEE_MANAGER_ROLE (deployer does) and
+    # to have deposited a bond of fee_asset (Vault.deposit); otherwise the settle is
+    # logged-and-skipped, never fatal.
+    builder_fee: int = 0
+    fee_asset: str = ""        # ERC20 charged; falls back to x402_asset when empty
+    fee_account: str = ""      # bond payer; falls back to the operator signer address
+
     # x402 alpha API (pay-per-call settlement)
     x402_pay_to: str = ""          # treasury wallet receiving USDC
     x402_asset: str = ""           # USDC token address on the target chain

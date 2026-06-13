@@ -59,3 +59,55 @@ async def test_no_chain_configured_means_no_proofs():
     iid = await svc.create_grid(7, _cfg())
     assert svc.proofs(iid) == {}                       # proofs disabled → unchanged behaviour
     await svc.stop_grid(7, iid)                         # still a clean close
+
+
+# ---- builder fee (monetization #1): operator bond → treasury, on-chain ----
+
+class FeeChain(MemoryChain):
+    """MemoryChain that also exposes a Vault + operator account, recording settles."""
+
+    def __init__(self):
+        super().__init__()
+        self.vault = object()                          # presence = "vault configured"
+        self.acct = type("Acct", (), {"address": "0xOperator"})()
+        self.fees: list = []
+
+    async def settle_fee(self, user, asset, amount):
+        self.fees.append((user, asset, amount))
+        return self._txhash()
+
+
+def _fee_svc(chain, **kw):
+    return AppService(client_factory=lambda _uid: FakeExchange({"mid": "100", "tick": "0.1"}),
+                      chain=chain, **kw)
+
+
+@pytest.mark.asyncio
+async def test_builder_fee_settles_from_operator_bond_on_close():
+    chain = FeeChain()
+    svc = _fee_svc(chain, builder_fee=10000, fee_asset="0xUSDC")
+    iid = await svc.create_grid(7, _cfg())
+    await svc.stop_grid(7, iid)
+    assert chain.fees == [("0xOperator", "0xUSDC", 10000)]   # operator → treasury
+    assert "fee" in svc.proofs(iid)
+
+
+@pytest.mark.asyncio
+async def test_builder_fee_off_by_default():
+    chain = FeeChain()
+    svc = _fee_svc(chain)                               # builder_fee defaults to 0
+    iid = await svc.create_grid(7, _cfg())
+    await svc.stop_grid(7, iid)
+    assert chain.fees == [] and "fee" not in svc.proofs(iid)
+
+
+@pytest.mark.asyncio
+async def test_builder_fee_revert_is_non_fatal():
+    class Broke(FeeChain):
+        async def settle_fee(self, user, asset, amount):
+            raise RuntimeError("InsufficientBalance")     # no bond deposited
+
+    svc = _fee_svc(Broke(), builder_fee=10000, fee_asset="0xUSDC")
+    iid = await svc.create_grid(7, _cfg())
+    await svc.stop_grid(7, iid)                            # must not raise
+    assert "fee" not in svc.proofs(iid)

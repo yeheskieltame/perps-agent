@@ -203,7 +203,7 @@ class MantleDexExchange:
         amount = sell_amount_raw(order.side, order.qty, float(order.price), dec_b, dec_q)
         self._ensure_allowance(sell, amount)
         idx = int(self._lom.functions.getDeactiveSlot(self._acct.address).call())
-        tx, fee = m, int(m["fee"])
+        fee = int(m["fee"])
         x, y = sorted([m["base"], m["quote"]], key=str.lower)
         params = (Web3.to_checksum_address(x), Web3.to_checksum_address(y), fee, int(point),
                   int(amount), bool(sell_x_earn_y), int(time.time()) + 600)

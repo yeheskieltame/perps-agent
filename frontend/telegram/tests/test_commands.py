@@ -40,10 +40,6 @@ class FakeAPI:
         self._maybe_fail()
         return {"equity": "73193.62", "available": "73000.00", "currency": "USDT"}
 
-    async def health(self):
-        self._maybe_fail()
-        return {"ok": True, "node": "0"}
-
 
 async def test_grid_defaults():
     api = FakeAPI()
@@ -92,17 +88,8 @@ async def test_stop_and_pause():
     assert ("stop", 42, "i1") in api.calls and ("pause", 42, "i1") in api.calls
 
 
-async def test_price_balance_health():
+async def test_price_and_balance():
     api = FakeAPI()
     assert "mid 100.0" in await commands.price(api, 42, "btcusdt")
     assert "Usage" in await commands.price(api, 42, "")
     assert "73193.62 USDT" in await commands.balance(api, 42)
-    assert "ok" in await commands.health(api)
-
-
-async def test_health_backend_down():
-    class DeadAPI:
-        async def health(self):
-            raise ConnectionError("connection refused")
-
-    assert "unreachable" in await commands.health(DeadAPI())

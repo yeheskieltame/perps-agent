@@ -1,5 +1,6 @@
 """Command logic — pure: takes the API client + sender id + raw args, returns the
 reply string (HTML). No aiogram imports, so every path is unit-testable offline.
+The same renderers back BOTH the typed commands and the inline-keyboard UI.
 """
 from __future__ import annotations
 
@@ -17,16 +18,48 @@ HELP = (
     "/stop INSTANCE — cancel orders, close the grid\n"
     "/pause INSTANCE — halt new orders\n"
     "/price MARKET — live top-of-book\n"
-    "/balance — venue equity\n"
-    "/health — backend status"
+    "/balance — venue equity\n\n"
+    "Tip: <b>/menu</b> opens the button UI — no typing needed."
 )
 
 _STATE_ICON = {"RUNNING": "🟢", "REBALANCING": "🔄", "HALTED": "🔴",
                "EXITING": "🟠", "INITIALIZING": "⏳"}
 
+# States that no longer place new orders — used for "active" counts and to hide
+# the ⏸ Pause button on a grid that is already winding down.
+_INACTIVE = {"HALTED", "EXITING"}
+
 
 def _err(e: ApiError) -> str:
     return f"⚠️ Backend refused ({e.status}): {e.detail or 'no detail'}"
+
+
+def _band_pct(band: str) -> Decimal:
+    """Half-band fraction (0.008) -> percent for display (0.8)."""
+    return (Decimal(band) * 100).normalize()
+
+
+# ── grid creation ────────────────────────────────────────────────────────────
+
+async def create_grid_result(api, user_id: int, market: str, band: str, levels: int,
+                             size: str, leverage: str = "1") -> tuple[str, str | None]:
+    """Place a grid. Returns (reply_text, instance_id|None) so callers that need the
+    id — the wizard's launched-card buttons — get it without re-parsing the text."""
+    try:
+        iid = await api.create_grid(user_id, market, band, levels, size, leverage)
+    except ApiError as e:
+        return _err(e), None
+    text = (f"✅ <b>Grid launched</b>\n"
+            f"instance: <code>{iid}</code>\n"
+            f"{market} · ±{_band_pct(band)}% band · {levels} levels · {size}/level\n"
+            f"Use /status to follow it, /stop <code>{iid}</code> to close.")
+    return text, iid
+
+
+async def grid_launch(api, user_id: int, market: str, band: str, levels: int,
+                      size: str, leverage: str = "1") -> str:
+    text, _ = await create_grid_result(api, user_id, market, band, levels, size, leverage)
+    return text
 
 
 async def grid(api, user_id: int, args: str, *, band: str = "0.01",
@@ -52,22 +85,12 @@ async def grid(api, user_id: int, args: str, *, band: str = "0.01",
             size = parts[3]
     except (InvalidOperation, ValueError):
         return "Could not parse arguments. Usage: <code>/grid MARKET [BAND% [LEVELS [SIZE]]]</code>"
-    try:
-        iid = await api.create_grid(user_id, market, band, levels, size)
-    except ApiError as e:
-        return _err(e)
-    pct_label = Decimal(band) * 100
-    return (f"✅ <b>Grid launched</b>\n"
-            f"instance: <code>{iid}</code>\n"
-            f"{market} · ±{pct_label.normalize()}% band · {levels} levels · {size}/level\n"
-            f"Use /status to follow it, /stop <code>{iid}</code> to close.")
+    return await grid_launch(api, user_id, market, band, levels, size)
 
 
-async def status(api, user_id: int) -> str:
-    try:
-        rows = await api.status(user_id)
-    except ApiError as e:
-        return _err(e)
+# ── status ───────────────────────────────────────────────────────────────────
+
+def render_status(rows: list[dict]) -> str:
     if not rows:
         return "No grids yet. Launch one with /grid MARKET"
     lines = ["📊 <b>Your grids</b>"]
@@ -76,6 +99,14 @@ async def status(api, user_id: int) -> str:
         lines.append(f"{icon} <code>{r['instance_id']}</code> — {r['state']}\n"
                      f"     pnl {r['realized_pnl']} · fills {r['fill_count']}")
     return "\n".join(lines)
+
+
+async def status(api, user_id: int) -> str:
+    try:
+        rows = await api.status(user_id)
+    except ApiError as e:
+        return _err(e)
+    return render_status(rows)
 
 
 async def stop(api, user_id: int, args: str) -> str:
@@ -119,11 +150,32 @@ async def balance(api, user_id: int) -> str:
     return f"💰 Equity <b>{b['equity']} {b['currency']}</b> · available {b['available']}"
 
 
-async def health(api) -> str:
+# ── inline-UI render helpers (pure) ──────────────────────────────────────────
+
+def grid_confirm_text(market: str, band: str, levels: int, size: str,
+                      leverage: str = "1") -> str:
+    return ("🧩 <b>Review grid</b>\n"
+            f"{market} · ±{_band_pct(band)}% band · {levels} levels · {size}/level · "
+            f"{leverage}× lev\n"
+            "Tap <b>Launch</b> to place it.")
+
+
+async def menu_snapshot(api, user_id: int) -> str:
+    """Welcome + live snapshot for the main menu. Degrades gracefully when the worker
+    is down (every read is best-effort) so the menu always renders."""
+    lines = ["🤖 <b>Perps Agent</b> — verifiable grid trading",
+             "Executes on Bybit; commits, learns &amp; proves on Mantle.", ""]
     try:
-        h = await api.health()
-    except ApiError as e:
-        return _err(e)
-    except Exception as e:  # backend down — connection refused etc.
-        return f"🔌 Backend unreachable: {e}"
-    return f"✅ Backend ok (node {h.get('node', '?')})"
+        rows = await api.status(user_id)
+        active = sum(1 for r in rows if r.get("state") not in _INACTIVE)
+        lines.append(f"📊 Active grids: <b>{active}</b>"
+                     + (f" / {len(rows)} total" if rows else ""))
+    except Exception:
+        lines.append("📊 Active grids: <i>unavailable</i>")
+    try:
+        b = await api.balance(user_id)
+        lines.append(f"💰 Equity: <b>{b['equity']} {b['currency']}</b>")
+    except Exception:
+        pass
+    lines += ["", "Pick an action 👇"]
+    return "\n".join(lines)

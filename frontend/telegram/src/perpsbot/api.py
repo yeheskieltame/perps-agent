@@ -34,9 +34,6 @@ class WorkerAPI:
                 raise ApiError(r.status, (await r.text())[:200].strip())
             return await r.json()
 
-    async def health(self) -> dict:
-        return await self._req("GET", "/healthz")
-
     async def market(self, user_id: int, market: str) -> dict:
         return await self._req("GET", f"/v1/market/{market}", user_id)
 

@@ -103,6 +103,15 @@ class FakeAPI:
         self._maybe_fail()
         return {"equity": "73193.62", "available": "73000.00", "currency": "USDT"}
 
+    async def positions(self, uid):
+        self._maybe_fail()
+        return getattr(self, "pos", [])
+
+    async def close_position(self, uid, market):
+        self.calls.append(("close_pos", uid, market))
+        self._maybe_fail()
+        return {"ok": True}
+
     async def health(self):
         self._maybe_fail()
         return {"ok": True, "node": "0"}
@@ -387,6 +396,36 @@ async def test_create_template_result_points_unconnected_users_to_connect():
     api.fail = ApiError(401, "no venue credentials")
     text, iid = await commands.create_template_result(api, 42, "BTCUSDT", "safe")
     assert iid is None and "/connect" in text
+
+
+def test_render_positions_empty_and_short_with_profit():
+    assert "No open positions" in commands.render_positions([])
+    rows = [{"market": "BTCUSDT", "side": "SHORT", "size": "0.00015", "entry": "72712",
+             "mark": "72660", "pnl": "0.01", "pnl_pct": "0.07", "notional": "10.91"}]
+    out = commands.render_positions(rows)
+    assert "BTCUSDT" in out and "SHORT" in out and "🔴" in out
+    assert "+$0.01" in out and "+0.07%" in out and "72712" in out and "72660" in out
+
+
+async def test_positions_returns_text_and_rows():
+    api = FakeAPI()
+    api.pos = [{"market": "BTCUSDT", "side": "LONG", "size": "0.1", "entry": "100",
+                "mark": "110", "pnl": "1", "pnl_pct": "10", "notional": "11"}]
+    text, rows = await commands.positions(api, 42)
+    assert rows is not None and "BTCUSDT" in text and "+$1.00" in text
+
+
+async def test_positions_error_yields_none_rows_and_connect_hint():
+    api = FakeAPI()
+    api.fail = ApiError(401, "no venue credentials")
+    text, rows = await commands.positions(api, 42)
+    assert rows is None and "/connect" in text
+
+
+async def test_close_position_note_and_call():
+    api = FakeAPI()
+    assert "Closed" in await commands.close_position(api, 42, "BTCUSDT")
+    assert ("close_pos", 42, "BTCUSDT") in api.calls
 
 
 def test_render_history_empty_and_rows():

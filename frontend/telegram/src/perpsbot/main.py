@@ -24,10 +24,11 @@ from . import commands
 from .api import WorkerAPI
 from .config import BotSettings, is_allowed
 from .keyboards import (
-    KNOB_HELP, KNOB_LABEL, GridCB, MenuCB, PriceCB, SetCB, WizCB,
-    back_kb, config_kb, detail_kb, grids_kb, launched_kb, main_menu_kb, price_kb,
-    price_result_kb, setting_picker_kb, stop_confirm_kb, wiz_band_kb, wiz_confirm_kb,
-    wiz_levels_kb, wiz_margin_kb, wiz_market_kb, wiz_size_kb, wiz_strategy_kb,
+    KNOB_HELP, KNOB_LABEL, GridCB, MenuCB, PosCB, PriceCB, SetCB, WizCB,
+    back_kb, config_kb, detail_kb, grids_kb, launched_kb, main_menu_kb, pos_confirm_kb,
+    positions_kb, price_kb, price_result_kb, setting_picker_kb, stop_confirm_kb,
+    wiz_band_kb, wiz_confirm_kb, wiz_levels_kb, wiz_margin_kb, wiz_market_kb, wiz_size_kb,
+    wiz_strategy_kb,
 )
 from .wizard import GridWizard, parse_band_pct, parse_levels, parse_market, parse_size
 
@@ -37,6 +38,7 @@ _COMMANDS = [
     BotCommand(command="start", description="🏠 Home — balance, positions, all buttons"),
     BotCommand(command="grid", description="➕ Launch a grid (wizard or args)"),
     BotCommand(command="status", description="📊 Your grids"),
+    BotCommand(command="positions", description="📋 Live Bybit positions"),
     BotCommand(command="history", description="📜 Closed-grid history"),
     BotCommand(command="wallet", description="👛 Your MNT wallet"),
     BotCommand(command="topup", description="💧 Fund your MNT wallet"),
@@ -217,6 +219,12 @@ async def cmd_balance(message: Message, api: WorkerAPI) -> None:
     await message.answer(await commands.balance(api, _uid(message)), reply_markup=back_kb("balance"))
 
 
+@router.message(Command("positions"))
+async def cmd_positions(message: Message, api: WorkerAPI) -> None:
+    text, rows = await commands.positions(api, _uid(message))
+    await message.answer(text, reply_markup=positions_kb(rows) if rows is not None else back_kb("positions"))
+
+
 @router.message(Command("wallet"))
 async def cmd_wallet(message: Message, api: WorkerAPI) -> None:
     await message.answer(await commands.wallet(api, _uid(message)), reply_markup=back_kb("wallet"))
@@ -349,6 +357,9 @@ async def cb_menu(cb: CallbackQuery, api: WorkerAPI, state: FSMContext,
         await _edit(cb, note + "\n\n" + commands.render_status(rows), grids_kb(rows))
     elif action == "balance":
         await _edit(cb, await commands.balance(api, uid), back_kb("balance"))
+    elif action == "positions":
+        text, rows = await commands.positions(api, uid)
+        await _edit(cb, text, positions_kb(rows) if rows is not None else back_kb("positions"))
     elif action == "price":
         await _edit(cb, "💱 <b>Price</b> — pick a market:", price_kb(settings.market_list()))
     elif action == "wallet":
@@ -423,6 +434,21 @@ async def on_config_value(m: Message, api: WorkerAPI, state: FSMContext) -> None
 
 
 # ── price picker ─────────────────────────────────────────────────────────────
+
+@router.callback_query(PosCB.filter(F.action == "close_ask"))
+async def cb_pos_close_ask(cb: CallbackQuery, callback_data: PosCB) -> None:
+    await cb.answer()
+    await _edit(cb, f"❌ Close your <b>{callback_data.market}</b> position at market price?",
+                pos_confirm_kb(callback_data.market))
+
+
+@router.callback_query(PosCB.filter(F.action == "close_do"))
+async def cb_pos_close_do(cb: CallbackQuery, api: WorkerAPI, callback_data: PosCB) -> None:
+    note = await commands.close_position(api, _uid(cb), callback_data.market)
+    await cb.answer(note[:180])
+    text, rows = await commands.positions(api, _uid(cb))
+    await _edit(cb, text, positions_kb(rows) if rows is not None else back_kb("positions"))
+
 
 @router.callback_query(PriceCB.filter())
 async def cb_price_pick(cb: CallbackQuery, api: WorkerAPI, callback_data: PriceCB) -> None:

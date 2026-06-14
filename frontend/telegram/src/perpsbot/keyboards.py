@@ -36,6 +36,11 @@ class SetCB(CallbackData, prefix="s"):
     val: str = ""
 
 
+class PosCB(CallbackData, prefix="po"):
+    action: str  # close_ask | close_do
+    market: str
+
+
 def _menu_row(kb: InlineKeyboardBuilder) -> None:
     """Standard footer: 🏠 Menu (back to main menu) · ❌ Close (delete this message)."""
     kb.row(
@@ -58,7 +63,7 @@ def main_menu_kb(connected: bool) -> InlineKeyboardMarkup:
     account row flips on connection (Connect ↔ Re-connect/Disconnect)."""
     kb = InlineKeyboardBuilder()
     kb.row(_b("🚀 New Grid", "new_grid"))                       # primary, full width
-    kb.row(_b("📊 My Grids", "grids"), _b("📜 History", "history"))
+    kb.row(_b("📊 My Grids", "grids"), _b("📋 Positions", "positions"), _b("📜 History", "history"))
     kb.row(_b("👛 Wallet", "wallet"), _b("💰 Balance", "balance"), _b("💱 Price", "price"))
     kb.row(_b("⚙️ Config", "settings"), _b("💧 Top up", "topup"))
     if connected:
@@ -198,6 +203,26 @@ def stop_confirm_kb(iid: str) -> InlineKeyboardMarkup:
 
 
 # ── price ────────────────────────────────────────────────────────────────────
+
+def positions_kb(rows: list[dict]) -> InlineKeyboardMarkup:
+    """Refresh + a Close button per open position, then the Menu/Close footer."""
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(text="🔄 Refresh", callback_data=MenuCB(action="positions").pack()))
+    for r in rows:
+        mkt = r["market"]
+        kb.row(InlineKeyboardButton(text=f"❌ Close {mkt}",
+                                    callback_data=PosCB(action="close_ask", market=mkt).pack()))
+    _menu_row(kb)
+    return kb.as_markup()
+
+
+def pos_confirm_kb(market: str) -> InlineKeyboardMarkup:
+    kb = InlineKeyboardBuilder()
+    kb.button(text="❌ Confirm Close", callback_data=PosCB(action="close_do", market=market))
+    kb.button(text="✖️ Cancel", callback_data=MenuCB(action="positions"))
+    kb.adjust(2)
+    return kb.as_markup()
+
 
 def price_kb(coins: list[str]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()

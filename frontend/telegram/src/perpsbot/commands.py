@@ -22,6 +22,7 @@ HELP = (
     "/set KEY VALUE — type one value, e.g. <code>/set leverage 25</code>\n"
     "/set reset — back to defaults\n"
     "/status — your grids (state, pnl, fills)\n"
+    "/positions — live Bybit positions (size, entry, mark, PnL) + close\n"
     "/stop INSTANCE — cancel orders, close the grid\n"
     "/pause INSTANCE — halt new orders\n"
     "/price MARKET — live top-of-book\n"
@@ -589,6 +590,43 @@ async def price(api, user_id: int, args: str) -> str:
     except ApiError as e:
         return _err(e)
     return f"💱 <b>{m['market']}</b> mid {m['mid']} (bid {m['bid']} / ask {m['ask']})"
+
+
+def render_positions(rows: list[dict]) -> str:
+    """Live Bybit positions: side · size (~notional) · entry→mark · PnL (% vs entry)."""
+    if not rows:
+        return "📋 <b>Positions · Bybit</b>\nNo open positions right now."
+    lines = ["📋 <b>Positions · Bybit</b>"]
+    for r in rows:
+        sicon = "🟢" if r["side"] == "LONG" else "🔴"
+        pnl = Decimal(str(r["pnl"]))
+        picon = "🟢" if pnl >= 0 else "🔴"
+        pnl_disp = f"+${_q2(pnl)}" if pnl >= 0 else f"-${_q2(-pnl)}"
+        pct = r["pnl_pct"]
+        pct_disp = f"+{pct}" if pnl >= 0 else str(pct)
+        lines.append(
+            f"\n{sicon} <b>{r['market']}</b> · {r['side']}\n"
+            f"Size {r['size']} (~${_q2(r['notional'])})\n"
+            f"Entry {r['entry']} → Mark {r['mark']}\n"
+            f"PnL {picon} {pnl_disp} ({pct_disp}% vs entry)")
+    return "\n".join(lines)
+
+
+async def positions(api, user_id: int) -> tuple[str, list[dict] | None]:
+    """Fetch + render Bybit positions. Returns (text, rows|None) — None on error."""
+    try:
+        rows = await api.positions(user_id)
+    except ApiError as e:
+        return (_err(e), None)
+    return (render_positions(rows), rows)
+
+
+async def close_position(api, user_id: int, market: str) -> str:
+    try:
+        await api.close_position(user_id, market)
+    except ApiError as e:
+        return _err(e)
+    return f"❌ Closed your {market} position."
 
 
 async def balance(api, user_id: int) -> str:

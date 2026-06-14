@@ -8,6 +8,7 @@ from __future__ import annotations
 import inspect
 import json
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Callable, Protocol, Sequence
 
 from ..agent.learn import to_record
@@ -263,6 +264,35 @@ class AppService:
     async def balance(self, user_id: int) -> BalanceView:
         session = await self._session(user_id)
         return await session.exchange.balance()
+
+    async def positions(self, user_id: int) -> list[dict]:
+        """Open venue positions enriched with side / mark / unrealized PnL (the model
+        only stores market + signed size + entry; mark comes from live top-of-book)."""
+        session = await self._session(user_id)
+        out: list[dict] = []
+        for p in await session.exchange.positions():
+            if p.size == 0:
+                continue
+            try:
+                bid, ask = await session.exchange.best_bid_ask(p.market)
+                mark = (bid + ask) / 2
+            except Exception:  # noqa: BLE001 — fall back to entry if the book is unavailable
+                mark = p.entry_price
+            pnl = (mark - p.entry_price) * p.size  # signed size → correct for long & short
+            base = abs(p.size) * p.entry_price
+            pnl_pct = (pnl / base * 100) if base else Decimal(0)
+            out.append({
+                "market": p.market, "side": "LONG" if p.size > 0 else "SHORT",
+                "size": str(abs(p.size)), "entry": str(p.entry_price), "mark": str(mark),
+                "pnl": str(pnl), "pnl_pct": str(round(pnl_pct, 2)),
+                "notional": str(abs(p.size) * mark),
+            })
+        return out
+
+    async def close_position(self, user_id: int, market: str) -> None:
+        """Flatten one venue position at market (a taker close)."""
+        session = await self._session(user_id)
+        await session.exchange.flatten(market)
 
     async def market_info(self, user_id: int, market: str) -> MarketView:
         """Live top-of-book through the user's own venue client — lets a UI turn

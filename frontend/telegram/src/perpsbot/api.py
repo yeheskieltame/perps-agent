@@ -101,6 +101,13 @@ class WorkerAPI:
     async def balance(self, user_id: int) -> dict:
         return await self._req("GET", "/v1/balance", user_id)
 
+    async def positions(self, user_id: int) -> list[dict]:
+        """Open Bybit positions: [{market, side, size, entry, mark, pnl, pnl_pct, notional}]."""
+        return await self._req("GET", "/v1/positions", user_id)
+
+    async def close_position(self, user_id: int, market: str) -> dict:
+        return await self._req("POST", f"/v1/positions/{market}/close", user_id)
+
     async def wallet(self, user_id: int) -> dict:
         """The user's managed MNT wallet (minted on first call): {address, balance,
         currency, faucet}. Pays the builder fee on Mantle."""

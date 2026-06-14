@@ -43,8 +43,8 @@ routes by user to N **workers** (`app/worker.py`, one shard each, default `:9000
 Single-node dev: call a worker directly — same endpoints.
 
 Identity: every request carries `X-User-Id: <int>` (for the Telegram bot this is
-the chat id). ⚠️ Sketch status: the header is **not authenticated yet** — do not
-expose the gateway publicly without an auth layer in front.
+the chat id). The header is **trusted input** — terminate auth at the gateway/ingress
+before exposing the worker to untrusted clients.
 
 | Method | Path | Body | Returns |
 |---|---|---|---|

@@ -9,32 +9,13 @@ these with distinct `PERPSAGENT_SHARD_NODE` behind `app/gateway.py`.
   PERPSAGENT_SHARD_NODE=0 PERPSAGENT_SHARD_COUNT=2 PERPSAGENT_WORKER_PORT=9000 \
     python -m perpsagent.app.worker
 
-API (user identified by the `X-User-Id` header):
-  GET    /healthz
-  POST   /v1/grids                {market, lower, upper, levels, order_size, ...} -> {instance_id}
-                                  (or {market, band, levels, ...} — bounds = mid*(1±band))
-  DELETE /v1/grids/{instance_id}
-  POST   /v1/grids/{instance_id}/pause
-  GET    /v1/status               -> [{instance_id, state, realized_pnl, fill_count}]
-  POST   /v1/grids/clear           -> {cleared: N}  (drop HALTED/EXITING from the active list)
-  GET    /v1/history               -> [{instance_id, market, realized_pnl, fill_count, winrate, closed_at}]
-  GET    /v1/settings             -> {settings: {band, levels, size, leverage, ...}, customized: [...]}
-  PUT    /v1/settings             {key: value, ...} -> validated, persisted per user
-  DELETE /v1/settings             -> reset to defaults
-  GET    /v1/balance              -> {equity, available, currency}
-  GET    /v1/market/{market}      -> {market, bid, ask, mid}
-  PUT    /v1/credentials          {api_key, api_secret, testnet=true} -> {ok, testnet}
-  GET    /v1/credentials          -> {connected, testnet, key_preview} | {connected: false}
-  DELETE /v1/credentials          -> {ok}  (forgets the keys, tears down the session)
-  GET    /v1/wallet               -> {address, balance, currency, faucet}  (managed MNT
-                                  wallet, minted on first call; pays the builder fee)
-
-A request for a user this shard does not own returns 409 (the gateway should never
-send one — this is defense-in-depth). A user with no stored venue keys gets 401 on
-any endpoint that needs their exchange client. The verifiable loop runs through the
-GridService facade: launch COMMITs the config hash on-chain before trading, stop
-ATTESTs the outcome + writes StrategyMemory (see app/service.py). SKETCH: still no
-auth on X-User-Id — the gateway is expected to authenticate; see TODOs.
+Every request identifies the user via the `X-User-Id` header; the routes ARE the
+`GridService` facade (see the route table in `build_worker_app`). Errors: a user this
+shard does not own → 409 (defense-in-depth; the gateway never sends one); a user with
+no stored venue keys → 401 on any endpoint needing their exchange client. The
+verifiable loop runs through the facade — launch COMMITs the config hash on-chain
+before trading, stop ATTESTs the outcome + writes StrategyMemory (app/service.py).
+X-User-Id is trusted input: terminate auth at the gateway/ingress.
 """
 from __future__ import annotations
 

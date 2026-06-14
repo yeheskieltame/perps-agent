@@ -1,13 +1,15 @@
-"""Gateway sketch — the stateless front door that routes each request to the worker
-owning the user (plan/SCALING.md #10).
+"""Gateway — the stateless front door that routes each request to the worker owning
+the user (plan/SCALING.md #10).
 
 It reads `X-User-Id`, computes `shard = ShardRouter.route(user_id)`, and reverse-
 proxies the call to that shard's worker URL. Because routing is consistent hashing
 over hashlib, every gateway replica routes identically — run several behind a load
 balancer. The workers hold all the state; the gateway holds none.
 
-SKETCH: no auth, retries, circuit-breaking, or streaming/SSE pass-through yet —
-those are the obvious next steps. See TODOs.
+Scope: the single-host deploy (deploy/) talks to one worker directly; this gateway
+is the horizontal-scale path for several workers. It is unauthenticated by design —
+terminate auth at your ingress before exposing it (retries/SSE pass-through live
+here too when needed).
 
   PERPSAGENT_SHARD_COUNT=2 PERPSAGENT_GATEWAY_PORT=8080 \
   PERPSAGENT_SHARD_URLS='{"0":"http://127.0.0.1:9000","1":"http://127.0.0.1:9001"}' \

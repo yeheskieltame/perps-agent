@@ -77,7 +77,8 @@ async def test_breaker_drawdown_on_unrealized():
     eng = GridEngine(ex, _cfg(), breaker=breaker)
     await eng.start()
     # build a long bag at 100, then mark drops to 90 -> unrealized = -10 < -5
-    eng.pos_qty = Decimal("1"); eng.pos_avg = Decimal("100")
+    eng.pos_qty = Decimal("1")
+    eng.pos_avg = Decimal("100")
     await ex.move_price("BTCUSDT", Decimal("90"))
     await eng.maybe_recenter()
     assert breaker.tripped and eng.state is GridState.HALTED
@@ -103,7 +104,8 @@ async def test_engine_banks_profit_on_trailing_stop():
     pg = ProfitGuard(trail_frac=Decimal("0.3"), trail_arm=Decimal("1"))
     eng = GridEngine(ex, _cfg(), profit_guard=pg)
     await eng.start()
-    eng.pos_qty = Decimal("1"); eng.pos_avg = Decimal("100")  # long 1 @ 100
+    eng.pos_qty = Decimal("1")
+    eng.pos_avg = Decimal("100")  # long 1 @ 100
     await eng._check_guards(Decimal("110"))   # +10 unrealized -> peak 10, armed
     assert eng.state is GridState.RUNNING
     await eng._check_guards(Decimal("108"))   # gave back 2 (<3) -> hold
@@ -117,7 +119,8 @@ async def test_recenter_does_not_average_up_into_a_pump():
     ex = FakeExchange({"mid": "100", "tick": "0.1"})
     eng = GridEngine(ex, _cfg())
     await eng.start()
-    eng.pos_qty = Decimal("0.05"); eng.pos_avg = Decimal("100")  # long, avg 100
+    eng.pos_qty = Decimal("0.05")
+    eng.pos_avg = Decimal("100")  # long, avg 100
     await ex.move_price("BTCUSDT", Decimal("110"))   # pump far above avg entry
     await eng.maybe_recenter()
     buys = [o for o in await ex.open_orders("BTCUSDT") if o.side is Side.BUY]
@@ -248,7 +251,8 @@ async def test_signed_position_tracks_short_from_flat():
 def test_signed_position_flip_long_to_short_realizes_pnl():
     ex = FakeExchange({"mid": "100"})
     eng = GridEngine(ex, _cfg())
-    eng.pos_qty = Decimal("1"); eng.pos_avg = Decimal("100")  # long 1 @ 100
+    eng.pos_qty = Decimal("1")
+    eng.pos_avg = Decimal("100")  # long 1 @ 100
     eng._apply_fill(Side.SELL, Decimal("110"), Decimal("3"))  # close 1 (+10), flip to short 2 @ 110
     assert eng.realized == Decimal("10")
     assert eng.net_inventory() == Decimal("-2")

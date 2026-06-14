@@ -85,9 +85,9 @@ PERPSAGENT_SHARD_COUNT=2 PERPSAGENT_GATEWAY_PORT=8080 \
 ```
 
 Clients call the gateway with an `X-User-Id` header; it forwards to the owning
-worker. Sketch — no auth/retries/SSE yet (see TODOs in `app/gateway.py`), and grids
-run through the `GridService` facade (wiring the verifiable LearningLoop per user is
-the follow-up).
+worker. The gateway is unauthenticated by design (terminate auth at your ingress),
+and grids run through the `GridService` facade — the verifiable LearningLoop is wired
+per user on launch/stop.
 
 Live: copy `.env.example` → `.env`, fill Bybit testnet keys + Mantle RPC/key + the
 3 proxy addresses + signal keys, then:

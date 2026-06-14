@@ -46,11 +46,16 @@ class WalletAdmin:
         return self._codec.decrypt(token)["private_key"] if token else None
 
     async def balance(self, user_id: int) -> int:
-        """On-chain MNT balance (wei); 0 when no wallet or no RPC configured."""
+        """On-chain MNT balance (wei); 0 when no wallet or no RPC configured. A read
+        error logs (journalctl) and returns 0 rather than 500-ing the /wallet call."""
         addr = await self.address(user_id)
         if not addr or not self._rpc_url:
             return 0
-        return await asyncio.to_thread(self._balance_sync, addr)
+        try:
+            return await asyncio.to_thread(self._balance_sync, addr)
+        except Exception as e:  # noqa: BLE001 — RPC hiccup: log + show 0, don't break /wallet
+            print(f"  ! wallet balance read failed ({addr}): {e}")
+            return 0
 
     async def pay(self, user_id: int, to: str, amount: int) -> str:
         """Send `amount` wei of MNT from the user's wallet to `to` (the builder fee).

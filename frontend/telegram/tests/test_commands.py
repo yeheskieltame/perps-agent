@@ -390,6 +390,16 @@ async def test_create_grid_result_surfaces_validation_error():
     assert iid is None and "band" in text
 
 
+def test_pick_free_balance_falls_back_to_equity_when_available_is_zero():
+    # Bybit testnet UNIFIED often reports availableBalance as 0/empty with healthy equity
+    assert commands.pick_free_balance({"available": "0", "equity": "74282"}) == "74282"
+    assert commands.pick_free_balance({"available": "0.00", "equity": "74282"}) == "74282"
+    assert commands.pick_free_balance({"available": "", "equity": "74282"}) == "74282"
+    assert commands.pick_free_balance({"available": "junk", "equity": "74282"}) == "74282"
+    assert commands.pick_free_balance({"equity": "74282"}) == "74282"
+    assert commands.pick_free_balance({"available": "500", "equity": "74282"}) == "500"  # real free margin wins
+
+
 def test_render_template_preview_shows_computed_margin_and_size():
     plan = {"market": "BTCUSDT", "margin": "1000", "leverage": "25", "notional": "25000",
             "levels": 8, "size": "31.25", "lower": "98", "upper": "102", "currency": "USDT"}

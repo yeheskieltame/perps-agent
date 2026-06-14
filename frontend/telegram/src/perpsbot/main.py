@@ -679,8 +679,7 @@ async def wiz_strategy_pick(cb: CallbackQuery, api: WorkerAPI, state: FSMContext
         return
     # Template path: capture the free balance (for the % presets) then ask for margin.
     try:
-        bal = await api.balance(_uid(cb))
-        free = bal.get("available") or bal.get("equity") or "0"
+        free = commands.pick_free_balance(await api.balance(_uid(cb)))
     except Exception:  # noqa: BLE001 — no creds / transport: can't size without a balance
         await _edit_wiz(bot, state, "🔑 Connect your Bybit keys first (/connect), then try again.",
                         wiz_strategy_kb())

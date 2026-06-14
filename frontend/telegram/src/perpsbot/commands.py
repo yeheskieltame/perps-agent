@@ -3,7 +3,7 @@ reply string (HTML). No aiogram imports, so every path is unit-testable offline.
 """
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from .api import ApiError
 
@@ -319,6 +319,20 @@ STRATEGY_BLURB = {
     "balanced": "Leverage <b>x5</b> · ~35% of your balance · <b>±1%</b> range · 10 steps",
     "aggressive": "Leverage <b>x25</b> · ~80% of your balance · wide <b>±2%</b> range · 8 steps",
 }
+
+
+def pick_free_balance(bal: dict) -> str:
+    """Balance to size the margin % from: available margin if it's positive, else
+    equity. (Bybit testnet UNIFIED frequently reports availableBalance as 0/empty
+    even with a healthy equity — a bare `available or equity` breaks because the
+    string '0' is truthy.)"""
+    avail = bal.get("available") or "0"
+    try:
+        if Decimal(str(avail)) > 0:
+            return str(avail)
+    except (InvalidOperation, ValueError):
+        pass
+    return str(bal.get("equity") or "0")
 
 
 WIZ_MARGIN = ("💰 <b>How much to commit?</b> This is the MARGIN (your own balance) — "

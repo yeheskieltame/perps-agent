@@ -8,8 +8,10 @@ from decimal import Decimal
 from .api import ApiError
 
 HELP = (
-    "<b>Perps Agent</b> — verifiable grid trading.\n"
-    "Executes on Bybit; commits, learns and proves on Mantle.\n\n"
+    "<b>Perps Agent</b> — a grid bot that buys low & sells high for you, over and over.\n"
+    "Runs on Bybit; records every move on Mantle so the track record is provable.\n\n"
+    "<b>New? Easiest path:</b> tap 🚀 <b>New Grid</b> → pick a coin → pick "
+    "🛡 Safe / ⚖️ Balanced / 🔥 Aggressive → Launch. That's it.\n\n"
     "<b>Commands</b>\n"
     "/start — the dashboard: every button on one screen\n"
     "/connect — link your own Bybit API keys (DM only)\n"
@@ -144,7 +146,8 @@ GRID_USAGE = ("Usage: <code>/grid MARKET [KEY=VALUE ...]</code>\n"
 def settings_card(settings: dict, customized: list[str] | None = None) -> str:
     """Render the grouped settings card. Keys the user changed get a ✏️ marker."""
     custom = set(customized or [])
-    lines = ["⚙️ <b>Your strategy settings</b> — every new /grid uses these"]
+    lines = ["⚙️ <b>Advanced settings</b> — fine-tune the engine.",
+             "<i>New here? You can ignore this — the New Grid presets pick good values.</i>"]
     shown = set()
     for group, keys in SETTING_GROUPS:
         rows = [(k, hint) for k, hint in keys if k in settings]
@@ -226,13 +229,45 @@ def render_status(rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def grid_confirm_text(market: str, band: str, levels: int, size: str) -> str:
-    """Wizard review screen. `band` is a half-band FRACTION ('0.01'); show it as %."""
+# ── plain-language wizard copy (a general user shouldn't need to know "band") ──
+
+WIZ_MARKET = ("➕ <b>New grid</b> · Step 1 of 2\n"
+              "Which coin do you want the bot to trade?\n"
+              "Tap one below, or type a symbol like <code>BTCUSDT</code>.")
+
+WIZ_STRATEGY = ("Step 2 of 2 — <b>How should it trade?</b>\n"
+                "A grid bot quietly <b>buys a little when the price dips and sells when it "
+                "rises</b>, over and over, pocketing the small difference.\n\n"
+                "Pick a ready-made style — or set it yourself:\n"
+                "🛡 <b>Safe</b> — narrow range, small steady gains, lower risk\n"
+                "⚖️ <b>Balanced</b> — the all-rounder (recommended)\n"
+                "🔥 <b>Aggressive</b> — wide range, bigger swings, more risk")
+
+WIZ_BAND = ("📏 <b>Range</b> — how far up & down from the current price the bot works.\n"
+            "<b>±1%</b> means it trades between −1% and +1% of the price right now.\n"
+            "Smaller = tighter range, trades more often. Tap a preset or type a number:")
+
+WIZ_LEVELS = ("🪜 <b>Steps</b> — how many orders the bot spreads inside that range.\n"
+              "More steps = finer grid, more frequent little trades. Tap or type:")
+
+WIZ_SIZE = ("🎚 <b>Size per step</b> — how much of the coin each order uses (e.g. "
+            "<code>0.001</code> BTC).\nBigger = bigger position and bigger risk. Tap or type:")
+
+_STRATEGY_LABEL = {"safe": "🛡 Safe", "balanced": "⚖️ Balanced", "aggressive": "🔥 Aggressive"}
+
+
+def grid_confirm_text(market: str, band: str, levels: int, size: str,
+                      style: str | None = None) -> str:
+    """Wizard review screen, in plain language. `band` is a FRACTION ('0.01')."""
     pct = (Decimal(band) * 100).normalize()
-    return (f"➕ <b>Review your grid</b>\n"
-            f"{market} · ±{pct}% band · {levels} levels · {size}/level\n"
-            f"Leverage, bias and guards come from your /settings.\n\n"
-            f"Tap ✅ Launch — it commits the config on-chain, then starts.")
+    head = f"➕ <b>Review</b> · {_STRATEGY_LABEL.get(style, '✏️ Custom')}"
+    return (f"{head}\n"
+            f"Coin: <b>{market}</b>\n"
+            f"Range: <b>±{pct}%</b> around the current price\n"
+            f"Steps: <b>{levels}</b> orders · Size: <b>{size}</b> each\n\n"
+            f"The bot will buy on dips and sell on rises inside that range, automatically.\n"
+            f"Leverage & safety limits come from your /settings.\n\n"
+            f"Tap ✅ Launch — it records the setup on-chain, then starts trading.")
 
 
 async def create_grid_result(api, user_id: int, market: str, band: str, levels,

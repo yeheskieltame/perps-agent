@@ -13,10 +13,20 @@ from aiogram.fsm.state import State, StatesGroup
 
 class GridWizard(StatesGroup):
     market = State()
+    strategy = State()   # pick a named preset, or go manual
     band = State()
     levels = State()
     size = State()
     confirm = State()
+
+
+# One-tap strategies so a general user never has to understand "band/levels/size".
+# band is the half-band FRACTION ('0.01' = ±1%); size is base qty per order.
+PRESETS: dict[str, dict] = {
+    "safe":       {"band": "0.005", "levels": 10, "size": "0.001"},
+    "balanced":   {"band": "0.01",  "levels": 10, "size": "0.001"},
+    "aggressive": {"band": "0.02",  "levels": 8,  "size": "0.005"},
+}
 
 
 def parse_market(text: str) -> str:

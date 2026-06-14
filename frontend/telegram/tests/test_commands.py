@@ -165,7 +165,7 @@ async def test_set_saves_one_key_and_reset_restores():
 
 async def test_set_without_args_shows_card_and_bad_value_is_friendly():
     api = FakeAPI()
-    assert "Your strategy settings" in await commands.set_value(api, 42, "")
+    assert "Advanced settings" in await commands.set_value(api, 42, "")
     assert "Usage" in await commands.set_value(api, 42, "leverage")      # value missing
     api.fail = ApiError(400, "unknown setting 'banana' — valid: band, levels, ...")
     out = await commands.set_value(api, 42, "banana 1")
@@ -316,9 +316,11 @@ def test_render_status_empty_and_rows():
     assert "i1" in out and "RUNNING" in out
 
 
-def test_grid_confirm_text_shows_percent():
-    out = commands.grid_confirm_text("BTCUSDT", "0.01", 10, "0.001")
-    assert "BTCUSDT" in out and "±1%" in out and "10 levels" in out
+def test_grid_confirm_text_shows_percent_and_style():
+    out = commands.grid_confirm_text("BTCUSDT", "0.01", 10, "0.001", style="balanced")
+    assert "BTCUSDT" in out and "±1%" in out and "Steps: <b>10</b>" in out
+    assert "Balanced" in out                                  # named style in the header
+    assert "Custom" in commands.grid_confirm_text("BTCUSDT", "0.01", 10, "0.001")
 
 
 async def test_create_grid_result_converts_band_to_percent_and_shows_commit():

@@ -1,7 +1,18 @@
 """Wizard input parsers — pure (str -> value | ValueError), tested offline."""
+from decimal import Decimal
+
 import pytest
 
-from perpsbot.wizard import parse_band_pct, parse_levels, parse_market, parse_size
+from perpsbot.wizard import PRESETS, parse_band_pct, parse_levels, parse_market, parse_size
+
+
+def test_presets_are_well_formed():
+    assert set(PRESETS) == {"safe", "balanced", "aggressive"}
+    for p in PRESETS.values():
+        assert {"band", "levels", "size"} <= set(p)
+        assert Decimal(p["band"]) > 0           # band stored as a fraction
+        assert 2 <= p["levels"] <= 200
+        assert Decimal(p["size"]) > 0
 
 
 def test_parse_market_normalizes_and_rejects():

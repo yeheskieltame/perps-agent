@@ -96,6 +96,18 @@ def wiz_market_kb(coins: list[str]) -> InlineKeyboardMarkup:
     return _picker("market", [(c, c) for c in coins], per_row=2)
 
 
+def wiz_strategy_kb() -> InlineKeyboardMarkup:
+    """One-tap styles (no jargon) + a manual escape hatch."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="🛡 Safe", callback_data=WizCB(field="preset", value="safe"))
+    kb.button(text="⚖️ Balanced", callback_data=WizCB(field="preset", value="balanced"))
+    kb.button(text="🔥 Aggressive", callback_data=WizCB(field="preset", value="aggressive"))
+    kb.button(text="✏️ Set it myself", callback_data=WizCB(field="preset", value="custom"))
+    kb.adjust(1)
+    _cancel_row(kb)
+    return kb.as_markup()
+
+
 def wiz_band_kb() -> InlineKeyboardMarkup:
     return _picker("band", [("±0.5%", "0.5"), ("±1%", "1"), ("±2%", "2"), ("±5%", "5")],
                    per_row=4)

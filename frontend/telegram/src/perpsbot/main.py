@@ -27,9 +27,11 @@ from .keyboards import (
     GridCB, MenuCB, PriceCB, SetCB, WizCB,
     back_kb, grids_kb, launched_kb, main_menu_kb, price_kb, price_result_kb,
     settings_kb, stop_confirm_kb, wiz_band_kb, wiz_confirm_kb, wiz_levels_kb,
-    wiz_market_kb, wiz_size_kb,
+    wiz_market_kb, wiz_size_kb, wiz_strategy_kb,
 )
-from .wizard import GridWizard, parse_band_pct, parse_levels, parse_market, parse_size
+from .wizard import (
+    PRESETS, GridWizard, parse_band_pct, parse_levels, parse_market, parse_size,
+)
 
 router = Router()
 
@@ -401,9 +403,7 @@ async def cb_stop_do(cb: CallbackQuery, api: WorkerAPI, callback_data: GridCB) -
 # ── grid wizard (single message, edited/advanced in place) ───────────────────
 
 async def _wizard_start(message: Message, settings: BotSettings, state: FSMContext) -> None:
-    sent = await message.answer(
-        "➕ <b>New grid</b> · Step 1/4\nPick a market (or type one):",
-        reply_markup=wiz_market_kb(settings.market_list()))
+    sent = await message.answer(commands.WIZ_MARKET, reply_markup=wiz_market_kb(settings.market_list()))
     await state.set_state(GridWizard.market)
     await state.update_data(cfg={}, chat=sent.chat.id, mid=sent.message_id)
 
@@ -444,10 +444,17 @@ async def _drop(message: Message) -> None:
         await message.delete()
 
 
-async def _go_band(bot: Bot, state: FSMContext, market: str) -> None:
+async def _go_strategy(bot: Bot, state: FSMContext, market: str) -> None:
     await _set(state, "market", market)
+    await state.set_state(GridWizard.strategy)
+    await _send_step(bot, state, f"Coin: <b>{market}</b> ✓\n\n{commands.WIZ_STRATEGY}",
+                     wiz_strategy_kb())
+
+
+async def _go_band(bot: Bot, state: FSMContext) -> None:
+    """Manual path: market is already set; ask for the range."""
     await state.set_state(GridWizard.band)
-    await _send_step(bot, state, f"Market: <b>{market}</b> ✓\nStep 2/4 — band %:", wiz_band_kb())
+    await _send_step(bot, state, commands.WIZ_BAND, wiz_band_kb())
 
 
 async def _go_levels(bot: Bot, state: FSMContext, band: str) -> None:
@@ -455,21 +462,20 @@ async def _go_levels(bot: Bot, state: FSMContext, band: str) -> None:
     await _set(state, "band", band)
     await state.set_state(GridWizard.levels)
     pct = (Decimal(band) * 100).normalize()
-    await _send_step(bot, state, f"Band: <b>±{pct}%</b> ✓\nStep 3/4 — levels:", wiz_levels_kb())
+    await _send_step(bot, state, f"Range set to ±{pct}% ✓\n\n{commands.WIZ_LEVELS}", wiz_levels_kb())
 
 
 async def _go_size(bot: Bot, state: FSMContext, levels: int) -> None:
     await _set(state, "levels", levels)
     await state.set_state(GridWizard.size)
-    await _send_step(bot, state, f"Levels: <b>{levels}</b> ✓\nStep 4/4 — size per level:", wiz_size_kb())
+    await _send_step(bot, state, f"Steps: {levels} ✓\n\n{commands.WIZ_SIZE}", wiz_size_kb())
 
 
 async def _go_confirm(bot: Bot, state: FSMContext, size: str) -> None:
     cfg = await _set(state, "size", size)
     await state.set_state(GridWizard.confirm)
-    await _send_step(bot, state,
-                     commands.grid_confirm_text(cfg["market"], cfg["band"], cfg["levels"], cfg["size"]),
-                     wiz_confirm_kb())
+    await _send_step(bot, state, commands.grid_confirm_text(
+        cfg["market"], cfg["band"], cfg["levels"], cfg["size"]), wiz_confirm_kb())
 
 
 @router.callback_query(GridWizard.market, WizCB.filter(F.field == "market"))
@@ -477,10 +483,10 @@ async def wiz_market_pick(cb: CallbackQuery, state: FSMContext, bot: Bot, settin
                           callback_data: WizCB) -> None:
     await cb.answer()
     if callback_data.value == "custom":
-        await _edit_wiz(bot, state, "Step 1/4 — type a market symbol, e.g. <code>BTCUSDT</code>:",
+        await _edit_wiz(bot, state, "Type a coin symbol, e.g. <code>BTCUSDT</code>:",
                         wiz_market_kb(settings.market_list()))
         return
-    await _go_band(bot, state, callback_data.value)
+    await _go_strategy(bot, state, callback_data.value)
 
 
 @router.message(GridWizard.market)
@@ -489,18 +495,35 @@ async def wiz_market_text(message: Message, state: FSMContext, bot: Bot, setting
     try:
         market = parse_market(message.text or "")
     except ValueError as e:
-        await _edit_wiz(bot, state, f"⚠️ {e}\nStep 1/4 — pick a market (or type one):",
+        await _edit_wiz(bot, state, f"⚠️ {e}\n\n{commands.WIZ_MARKET}",
                         wiz_market_kb(settings.market_list()))
         return
-    await _go_band(bot, state, market)
+    await _go_strategy(bot, state, market)
+
+
+# Step 2 — strategy: a one-tap preset, or "Set it myself" → manual range/steps/size
+@router.callback_query(GridWizard.strategy, WizCB.filter(F.field == "preset"))
+async def wiz_strategy_pick(cb: CallbackQuery, state: FSMContext, bot: Bot,
+                            callback_data: WizCB) -> None:
+    await cb.answer()
+    if callback_data.value == "custom":
+        await _go_band(bot, state)
+        return
+    preset = PRESETS[callback_data.value]
+    cfg = await _cfg(state)
+    cfg.update(band=preset["band"], levels=preset["levels"], size=preset["size"])
+    await state.update_data(cfg=cfg)
+    await state.set_state(GridWizard.confirm)
+    await _send_step(bot, state, commands.grid_confirm_text(
+        cfg["market"], cfg["band"], cfg["levels"], cfg["size"], style=callback_data.value),
+        wiz_confirm_kb())
 
 
 @router.callback_query(GridWizard.band, WizCB.filter(F.field == "band"))
 async def wiz_band_pick(cb: CallbackQuery, state: FSMContext, bot: Bot, callback_data: WizCB) -> None:
     await cb.answer()
     if callback_data.value == "custom":
-        await _edit_wiz(bot, state, "Step 2/4 — type band in percent, e.g. <code>1</code> for ±1%:",
-                        wiz_band_kb())
+        await _edit_wiz(bot, state, "Type the range in %, e.g. <code>1</code> for ±1%:", wiz_band_kb())
         return
     await _go_levels(bot, state, parse_band_pct(callback_data.value))
 
@@ -511,7 +534,7 @@ async def wiz_band_text(message: Message, state: FSMContext, bot: Bot) -> None:
     try:
         band = parse_band_pct(message.text or "")
     except ValueError as e:
-        await _edit_wiz(bot, state, f"⚠️ {e}\nStep 2/4 — band %:", wiz_band_kb())
+        await _edit_wiz(bot, state, f"⚠️ {e}\n\n{commands.WIZ_BAND}", wiz_band_kb())
         return
     await _go_levels(bot, state, band)
 
@@ -520,7 +543,7 @@ async def wiz_band_text(message: Message, state: FSMContext, bot: Bot) -> None:
 async def wiz_levels_pick(cb: CallbackQuery, state: FSMContext, bot: Bot, callback_data: WizCB) -> None:
     await cb.answer()
     if callback_data.value == "custom":
-        await _edit_wiz(bot, state, "Step 3/4 — type the number of levels (2–200):", wiz_levels_kb())
+        await _edit_wiz(bot, state, "Type how many steps (2–200):", wiz_levels_kb())
         return
     await _go_size(bot, state, parse_levels(callback_data.value))
 
@@ -531,7 +554,7 @@ async def wiz_levels_text(message: Message, state: FSMContext, bot: Bot) -> None
     try:
         levels = parse_levels(message.text or "")
     except ValueError as e:
-        await _edit_wiz(bot, state, f"⚠️ {e}\nStep 3/4 — levels:", wiz_levels_kb())
+        await _edit_wiz(bot, state, f"⚠️ {e}\n\n{commands.WIZ_LEVELS}", wiz_levels_kb())
         return
     await _go_size(bot, state, levels)
 
@@ -540,8 +563,7 @@ async def wiz_levels_text(message: Message, state: FSMContext, bot: Bot) -> None
 async def wiz_size_pick(cb: CallbackQuery, state: FSMContext, bot: Bot, callback_data: WizCB) -> None:
     await cb.answer()
     if callback_data.value == "custom":
-        await _edit_wiz(bot, state, "Step 4/4 — type the base size per level, e.g. <code>0.001</code>:",
-                        wiz_size_kb())
+        await _edit_wiz(bot, state, "Type the size per step, e.g. <code>0.001</code>:", wiz_size_kb())
         return
     await _go_confirm(bot, state, parse_size(callback_data.value))
 
@@ -552,7 +574,7 @@ async def wiz_size_text(message: Message, state: FSMContext, bot: Bot) -> None:
     try:
         size = parse_size(message.text or "")
     except ValueError as e:
-        await _edit_wiz(bot, state, f"⚠️ {e}\nStep 4/4 — size per level:", wiz_size_kb())
+        await _edit_wiz(bot, state, f"⚠️ {e}\n\n{commands.WIZ_SIZE}", wiz_size_kb())
         return
     await _go_confirm(bot, state, size)
 

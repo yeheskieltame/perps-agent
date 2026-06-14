@@ -5,7 +5,12 @@ import pytest
 
 from perpsagent.adapters.exchanges.fake import FakeExchange
 from perpsagent.app.service import AppService
-from perpsagent.domain.models import Position
+from perpsagent.domain.models import GridConfig, Position, Spacing, Venue
+
+
+def _cfg(iid: str):
+    return GridConfig(iid, Venue.FAKE, "BTCUSDT", Decimal("99"), Decimal("101"), 10,
+                      Decimal("0.001"), Spacing.GEOMETRIC)
 
 
 @pytest.mark.asyncio
@@ -38,3 +43,35 @@ async def test_zero_size_positions_are_skipped():
     ex._positions["ETHUSDT"] = Position("ETHUSDT", Decimal("0"), Decimal("100"))
     svc = AppService(client_factory=lambda _u: ex)
     assert await svc.positions(7) == []
+
+
+@pytest.mark.asyncio
+async def test_close_all_positions_flattens_every_market():
+    ex = FakeExchange({"mid": "100"})
+    ex._positions["BTCUSDT"] = Position("BTCUSDT", Decimal("0.1"), Decimal("100"))
+    ex._positions["ETHUSDT"] = Position("ETHUSDT", Decimal("-1"), Decimal("50"))
+    svc = AppService(client_factory=lambda _u: ex)
+    assert await svc.close_all_positions(7) == 2
+    assert set(ex.flatten_calls) == {"BTCUSDT", "ETHUSDT"}
+
+
+@pytest.mark.asyncio
+async def test_cancel_all_orders_stops_grids_first():
+    ex = FakeExchange({"mid": "100", "tick": "0.1"})
+    svc = AppService(client_factory=lambda _u: ex)
+    await svc.create_grid(7, _cfg("BTCUSDT-0-a"))
+    assert len(await svc.status(7)) == 1
+    markets = await svc.cancel_all_orders(7)
+    assert await svc.status(7) == []          # grids stopped (won't re-place)
+    assert markets >= 1
+
+
+@pytest.mark.asyncio
+async def test_panic_stops_grids_and_closes_positions():
+    ex = FakeExchange({"mid": "100", "tick": "0.1"})
+    ex._positions["ETHUSDT"] = Position("ETHUSDT", Decimal("1"), Decimal("50"))
+    svc = AppService(client_factory=lambda _u: ex)
+    await svc.create_grid(7, _cfg("BTCUSDT-0-a"))
+    res = await svc.panic(7)
+    assert res["grids_stopped"] == 1
+    assert await svc.status(7) == [] and "ETHUSDT" in ex.flatten_calls

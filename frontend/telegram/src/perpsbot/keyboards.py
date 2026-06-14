@@ -212,6 +212,8 @@ def positions_kb(rows: list[dict]) -> InlineKeyboardMarkup:
         mkt = r["market"]
         kb.row(InlineKeyboardButton(text=f"❌ Close {mkt}",
                                     callback_data=PosCB(action="close_ask", market=mkt).pack()))
+    kb.row(_b("❌ Close all", "closeall_ask"), _b("🧹 Cancel all orders", "cancelall_ask"))
+    kb.row(_b("🛑 Close everything", "panic_ask"))
     _menu_row(kb)
     return kb.as_markup()
 
@@ -219,6 +221,15 @@ def positions_kb(rows: list[dict]) -> InlineKeyboardMarkup:
 def pos_confirm_kb(market: str) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
     kb.button(text="❌ Confirm Close", callback_data=PosCB(action="close_do", market=market))
+    kb.button(text="✖️ Cancel", callback_data=MenuCB(action="positions"))
+    kb.adjust(2)
+    return kb.as_markup()
+
+
+def bulk_confirm_kb(do_action: str) -> InlineKeyboardMarkup:
+    """Yes/Cancel for a destructive bulk action (do_action is a MenuCB action)."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✅ Yes, do it", callback_data=MenuCB(action=do_action))
     kb.button(text="✖️ Cancel", callback_data=MenuCB(action="positions"))
     kb.adjust(2)
     return kb.as_markup()

@@ -629,6 +629,31 @@ async def close_position(api, user_id: int, market: str) -> str:
     return f"❌ Closed your {market} position."
 
 
+async def close_all_positions(api, user_id: int) -> str:
+    try:
+        n = (await api.close_all_positions(user_id)).get("closed", 0)
+    except ApiError as e:
+        return _err(e)
+    return f"❌ Closed {n} position(s)." if n else "No open positions to close."
+
+
+async def cancel_all_orders(api, user_id: int) -> str:
+    try:
+        n = (await api.cancel_all_orders(user_id)).get("markets", 0)
+    except ApiError as e:
+        return _err(e)
+    return f"🧹 Cancelled all orders + stopped grids across {n} market(s)."
+
+
+async def panic(api, user_id: int) -> str:
+    try:
+        r = await api.panic(user_id)
+    except ApiError as e:
+        return _err(e)
+    return (f"🛑 <b>Flat &amp; out.</b>\nStopped {r.get('grids_stopped', 0)} grid(s), "
+            f"closed {r.get('positions_closed', 0)} position(s), cancelled all orders.")
+
+
 async def balance(api, user_id: int) -> str:
     try:
         b = await api.balance(user_id)

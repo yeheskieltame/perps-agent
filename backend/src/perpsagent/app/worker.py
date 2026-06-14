@@ -281,6 +281,33 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
             raise web.HTTPConflict(reason=str(e)) from None
         return web.json_response({"ok": True})
 
+    async def close_all_positions(request: web.Request) -> web.Response:
+        try:
+            n = await service.close_all_positions(_user_id(request))
+        except KeyError:
+            raise web.HTTPUnauthorized(reason=_NO_CREDS) from None
+        except PermissionError as e:
+            raise web.HTTPConflict(reason=str(e)) from None
+        return web.json_response({"closed": n})
+
+    async def cancel_all_orders(request: web.Request) -> web.Response:
+        try:
+            n = await service.cancel_all_orders(_user_id(request))
+        except KeyError:
+            raise web.HTTPUnauthorized(reason=_NO_CREDS) from None
+        except PermissionError as e:
+            raise web.HTTPConflict(reason=str(e)) from None
+        return web.json_response({"markets": n})
+
+    async def panic(request: web.Request) -> web.Response:
+        try:
+            result = await service.panic(_user_id(request))
+        except KeyError:
+            raise web.HTTPUnauthorized(reason=_NO_CREDS) from None
+        except PermissionError as e:
+            raise web.HTTPConflict(reason=str(e)) from None
+        return web.json_response(result)
+
     async def market(request: web.Request) -> web.Response:
         try:
             m = await service.market_info(_user_id(request), request.match_info["market"])
@@ -346,7 +373,10 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
     app.router.add_get("/v1/history", history)
     app.router.add_get("/v1/balance", balance)
     app.router.add_get("/v1/positions", positions)
+    app.router.add_post("/v1/positions/close-all", close_all_positions)
     app.router.add_post("/v1/positions/{market}/close", close_position)
+    app.router.add_post("/v1/orders/cancel-all", cancel_all_orders)
+    app.router.add_post("/v1/panic", panic)
     app.router.add_get("/v1/market/{market}", market)
     app.router.add_put("/v1/credentials", put_credentials)
     app.router.add_get("/v1/credentials", get_credentials)

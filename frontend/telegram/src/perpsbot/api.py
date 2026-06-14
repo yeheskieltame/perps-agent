@@ -108,6 +108,17 @@ class WorkerAPI:
     async def close_position(self, user_id: int, market: str) -> dict:
         return await self._req("POST", f"/v1/positions/{market}/close", user_id)
 
+    async def close_all_positions(self, user_id: int) -> dict:
+        return await self._req("POST", "/v1/positions/close-all", user_id)
+
+    async def cancel_all_orders(self, user_id: int) -> dict:
+        """Cancel every resting order (also stops grids so they don't re-place)."""
+        return await self._req("POST", "/v1/orders/cancel-all", user_id)
+
+    async def panic(self, user_id: int) -> dict:
+        """Flat & out: stop all grids, cancel all orders, close all positions."""
+        return await self._req("POST", "/v1/panic", user_id)
+
     async def wallet(self, user_id: int) -> dict:
         """The user's managed MNT wallet (minted on first call): {address, balance,
         currency, faucet}. Pays the builder fee on Mantle."""

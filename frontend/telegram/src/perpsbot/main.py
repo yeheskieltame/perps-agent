@@ -25,8 +25,8 @@ from .api import WorkerAPI
 from .config import BotSettings, is_allowed
 from .keyboards import (
     KNOB_HELP, KNOB_LABEL, GridCB, MenuCB, PosCB, PriceCB, SetCB, WizCB,
-    back_kb, config_kb, detail_kb, grids_kb, launched_kb, main_menu_kb, pos_confirm_kb,
-    positions_kb, price_kb, price_result_kb, setting_picker_kb, stop_confirm_kb,
+    back_kb, bulk_confirm_kb, config_kb, detail_kb, grids_kb, launched_kb, main_menu_kb,
+    pos_confirm_kb, positions_kb, price_kb, price_result_kb, setting_picker_kb, stop_confirm_kb,
     wiz_band_kb, wiz_confirm_kb, wiz_levels_kb, wiz_margin_kb, wiz_market_kb, wiz_size_kb,
     wiz_strategy_kb,
 )
@@ -360,6 +360,23 @@ async def cb_menu(cb: CallbackQuery, api: WorkerAPI, state: FSMContext,
     elif action == "positions":
         text, rows = await commands.positions(api, uid)
         await _edit(cb, text, positions_kb(rows) if rows is not None else back_kb("positions"))
+    elif action == "closeall_ask":
+        await _edit(cb, "❌ <b>Close ALL positions</b> at market price?\nThis flattens every "
+                        "open position on the venue.", bulk_confirm_kb("closeall_do"))
+    elif action == "cancelall_ask":
+        await _edit(cb, "🧹 <b>Cancel ALL orders?</b>\nThis also <b>stops every running grid</b> "
+                        "(so they don't re-place orders).", bulk_confirm_kb("cancelall_do"))
+    elif action == "panic_ask":
+        await _edit(cb, "🛑 <b>Close EVERYTHING?</b>\nStops all grids, cancels all orders, and "
+                        "flattens all positions. Use to get fully flat & out.", bulk_confirm_kb("panic_do"))
+    elif action in ("closeall_do", "cancelall_do"):
+        note = (await commands.close_all_positions(api, uid) if action == "closeall_do"
+                else await commands.cancel_all_orders(api, uid))
+        text, rows = await commands.positions(api, uid)
+        await _edit(cb, note + "\n\n" + text, positions_kb(rows) if rows is not None else back_kb("positions"))
+    elif action == "panic_do":
+        note = await commands.panic(api, uid)
+        await _edit(cb, note, main_menu_kb(await _connected(api, uid)))
     elif action == "price":
         await _edit(cb, "💱 <b>Price</b> — pick a market:", price_kb(settings.market_list()))
     elif action == "wallet":

@@ -294,6 +294,53 @@ class AppService:
         session = await self._session(user_id)
         await session.exchange.flatten(market)
 
+    async def stop_all_grids(self, user_id: int) -> int:
+        """Stop every running grid for the user (each cancels its orders + flattens)."""
+        session = self._sessions.get(user_id)
+        if session is None:
+            return 0
+        iids = [eng.cfg.instance_id for eng in session.engines()]
+        for iid in iids:
+            try:
+                await self.stop_grid(user_id, iid)
+            except Exception as e:  # noqa: BLE001 — keep going through the rest
+                print(f"  ! stop_grid failed ({iid}): {e}")
+        return len(iids)
+
+    async def close_all_positions(self, user_id: int) -> int:
+        """Flatten every open venue position. Returns how many were closed."""
+        session = await self._session(user_id)
+        n = 0
+        for p in await session.exchange.positions():
+            if p.size != 0:
+                try:
+                    await session.exchange.flatten(p.market)
+                    n += 1
+                except Exception as e:  # noqa: BLE001
+                    print(f"  ! flatten failed ({p.market}): {e}")
+        return n
+
+    async def cancel_all_orders(self, user_id: int) -> int:
+        """Cancel all resting orders. Stops grids first (so they don't re-place), then
+        venue cancel-all over every market with a grid or a position. Returns #markets."""
+        session = await self._session(user_id)
+        markets = {eng.cfg.market for eng in session.engines()}  # capture BEFORE stopping
+        await self.stop_all_grids(user_id)
+        markets |= {p.market for p in await session.exchange.positions() if p.size != 0}
+        for m in markets:
+            try:
+                await session.exchange.cancel_all(m)
+            except Exception as e:  # noqa: BLE001
+                print(f"  ! cancel_all failed ({m}): {e}")
+        return len(markets)
+
+    async def panic(self, user_id: int) -> dict:
+        """Flat & out: stop all grids, cancel all orders, close all positions."""
+        grids = await self.stop_all_grids(user_id)
+        await self.cancel_all_orders(user_id)
+        closed = await self.close_all_positions(user_id)
+        return {"grids_stopped": grids, "positions_closed": closed}
+
     async def market_info(self, user_id: int, market: str) -> MarketView:
         """Live top-of-book through the user's own venue client — lets a UI turn
         'band ±1%' into absolute grid bounds without importing any exchange SDK."""

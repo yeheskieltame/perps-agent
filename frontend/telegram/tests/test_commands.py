@@ -112,6 +112,18 @@ class FakeAPI:
         self._maybe_fail()
         return {"ok": True}
 
+    async def close_all_positions(self, uid):
+        self._maybe_fail()
+        return {"closed": getattr(self, "closed_n", 0)}
+
+    async def cancel_all_orders(self, uid):
+        self._maybe_fail()
+        return {"markets": getattr(self, "markets_n", 0)}
+
+    async def panic(self, uid):
+        self._maybe_fail()
+        return {"grids_stopped": 2, "positions_closed": 1}
+
     async def health(self):
         self._maybe_fail()
         return {"ok": True, "node": "0"}
@@ -426,6 +438,21 @@ async def test_close_position_note_and_call():
     api = FakeAPI()
     assert "Closed" in await commands.close_position(api, 42, "BTCUSDT")
     assert ("close_pos", 42, "BTCUSDT") in api.calls
+
+
+async def test_bulk_close_and_cancel_notes():
+    api = FakeAPI()
+    api.closed_n = 3
+    assert "Closed 3" in await commands.close_all_positions(api, 42)
+    assert "No open positions" in await commands.close_all_positions(FakeAPI(), 42)
+    api2 = FakeAPI()
+    api2.markets_n = 2
+    assert "2 market" in await commands.cancel_all_orders(api2, 42)
+
+
+async def test_panic_note_reports_what_it_did():
+    out = await commands.panic(FakeAPI(), 42)
+    assert "Flat" in out and "Stopped 2" in out and "closed 1" in out
 
 
 def test_render_history_empty_and_rows():

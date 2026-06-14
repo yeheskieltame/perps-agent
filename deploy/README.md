@@ -99,6 +99,14 @@ perpsagent-worker perpsbot` and check each leg:
 | **x402 alpha API** | set `X402_PAY_TO`, enable `perpsagent-alpha`; `curl -i http://HOST:8402/v1/alpha/recall/BTCUSDT` | **HTTP 402** + `PaymentRequirements` (asset MNT); pay MNT to `PAY_TO` then retry with `{txHash}` → 200 + verified episodes |
 | **Builder fee** | set `PERPSAGENT_BUILDER_FEE>0` (wei) + `X402_PAY_TO` (treasury), close a grid | native MNT transfer operator→treasury, confirmed on mantlescan |
 
+Full paid round-trip (402 → pay MNT → 200 + data), from the VPS:
+```bash
+cd /opt/perps-agent/backend
+sudo -u perps .venv/bin/python scripts/x402_pay.py http://127.0.0.1:8402/v1/alpha/recall/BTCUSDT
+```
+It reads the payer key from `.env`, pays the quoted MNT to `payTo`, then retries with
+`X-PAYMENT` and prints the 200 + verified-alpha JSON (and the mantlescan tx link).
+
 > **x402 settlement on Mantle = native MNT** (default). Mantle's gas token isn't an
 > EIP-3009 ERC-20, so the gasless "exact" scheme can't move it; instead the client
 > pays MNT and the server verifies that transfer on-chain — real on-chain pay-per-call,

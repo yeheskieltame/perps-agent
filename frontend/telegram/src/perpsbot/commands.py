@@ -319,18 +319,35 @@ STRATEGY_BLURB = {
 }
 
 
-def template_confirm_text(market: str, template: str) -> str:
+WIZ_MARGIN = ("💰 <b>How much to commit?</b> This is the MARGIN (your own balance) — "
+              "leverage is applied on top.\nPick a % of your free balance, or ✏️ type an "
+              "amount in USDT:")
+
+
+def _q2(s) -> str:
+    return f"{Decimal(str(s)):,.2f}"
+
+
+def _num(s) -> str:
+    return str(Decimal(str(s)).normalize())
+
+
+def render_template_preview(plan: dict, template: str) -> str:
+    """Review screen with the COMPUTED value (margin × leverage = notional, size/step)."""
+    cur = plan.get("currency", "USDT")
     return (f"➕ <b>Review</b> · {_STRATEGY_LABEL.get(template, template)}\n"
-            f"Coin: <b>{market}</b>\n{STRATEGY_BLURB.get(template, '')}\n"
-            f"💡 <b>Order size is auto-set from your balance.</b>\n\n"
+            f"Coin: <b>{plan['market']}</b> · range {plan['lower']} – {plan['upper']}\n"
+            f"Margin: <b>{_q2(plan['margin'])} {cur}</b> × lev x{plan['leverage']} "
+            f"= notional <b>{_q2(plan['notional'])} {cur}</b>\n"
+            f"{plan['levels']} steps · size <b>{_num(plan['size'])}</b>/step\n\n"
             f"Tap ✅ Launch — records the setup on-chain, then starts.")
 
 
-async def create_template_result(api, user_id: int, market: str,
-                                 template: str) -> tuple[str, str | None]:
-    """Launch a one-tap template (backend auto-sizes from balance). -> (reply, iid|None)."""
+async def create_template_result(api, user_id: int, market: str, template: str,
+                                 margin: str | None = None) -> tuple[str, str | None]:
+    """Launch a template grid sized from the chosen margin. -> (reply, iid|None)."""
     try:
-        resp = await api.create_grid(user_id, market.upper(), template=template)
+        resp = await api.create_grid(user_id, market.upper(), template=template, margin=margin)
     except ApiError as e:
         if e.status == 401:
             return ("🔑 Connect your Bybit keys first with /connect.", None)

@@ -93,30 +93,53 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
     async def healthz(_request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "node": node})
 
+    async def _plan_template(user_id: int, market: str | None, template: str | None, margin) -> dict:
+        """Resolve a template + chosen margin into concrete settings + a preview of the
+        resulting size/notional/bounds (the worker has the live balance + price). The
+        user commits `margin` (quote/USDT); leverage comes from the template. With no
+        margin, the template's default fraction of free balance is used."""
+        if template not in prefs.STRATEGY_TEMPLATES:
+            raise web.HTTPBadRequest(reason=f"unknown template: {template}")
+        if not market:
+            raise web.HTTPBadRequest(reason="market required")
+        try:
+            bal = await service.balance(user_id)
+            m = await service.market_info(user_id, market)
+        except KeyError:
+            raise web.HTTPUnauthorized(reason=_NO_CREDS) from None
+        except PermissionError as e:
+            raise web.HTTPConflict(reason=str(e)) from None
+        tpl = prefs.STRATEGY_TEMPLATES[template]
+        free = bal.available if bal.available > 0 else bal.equity
+        margin_q = Decimal(str(margin)) if margin not in (None, "") else prefs.default_margin(template, free)
+        size = prefs.grid_size(template, margin_q, m.mid)
+        if size <= 0:
+            raise web.HTTPBadRequest(reason="margin/balance too low to size this grid")
+        mid = Decimal(m.mid)
+        band = Decimal(tpl["band"]) / 100
+        return {
+            "settings": prefs.template_settings(template, size),
+            "market": market, "template": template, "size": str(size), "margin": str(margin_q),
+            "notional": str(margin_q * Decimal(tpl["leverage"])), "leverage": tpl["leverage"],
+            "levels": tpl["levels"], "currency": bal.currency,
+            "free_balance": str(free), "mid": str(mid),
+            "lower": str(mid * (1 - band)), "upper": str(mid * (1 + band)),
+        }
+
+    async def preview(request: web.Request) -> web.Response:
+        body = await request.json()
+        plan = await _plan_template(_user_id(request), body.get("market"),
+                                    body.get("template"), body.get("margin"))
+        return web.json_response(plan)
+
     async def create(request: web.Request) -> web.Response:
         user_id = _user_id(request)
         body = await request.json()
-        # One-tap strategy template: resolve it to balance-sized settings here (the
-        # worker has the user's live balance + price; the UI never needs an SDK).
-        template = body.get("template")
-        if template:
-            if template not in prefs.STRATEGY_TEMPLATES:
-                raise web.HTTPBadRequest(reason=f"unknown template: {template}")
-            market = body.get("market")
-            if not market:
-                raise web.HTTPBadRequest(reason="market required")
-            try:
-                bal = await service.balance(user_id)
-                m = await service.market_info(user_id, market)
-            except KeyError:
-                raise web.HTTPUnauthorized(reason=_NO_CREDS) from None
-            except PermissionError as e:
-                raise web.HTTPConflict(reason=str(e)) from None
-            free = bal.available if bal.available > 0 else bal.equity
-            size = prefs.autosize(template, free, m.mid)
-            if size <= 0:
-                raise web.HTTPBadRequest(reason="balance too low to auto-size this template")
-            body["settings"] = {**(body.get("settings") or {}), **prefs.template_settings(template, size)}
+        # One-tap strategy template: resolve it (with the chosen margin) to concrete
+        # balance-sized settings here, then fall through to the normal launch path.
+        if body.get("template"):
+            plan = await _plan_template(user_id, body.get("market"), body["template"], body.get("margin"))
+            body["settings"] = {**(body.get("settings") or {}), **plan["settings"]}
         # Merge the user's tunables: defaults < saved settings < body["settings"].
         try:
             overrides = prefs.validate_updates(body.get("settings") or {})
@@ -292,6 +315,7 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
 
     app.router.add_get("/healthz", healthz)
     app.router.add_post("/v1/grids", create)
+    app.router.add_post("/v1/grids/preview", preview)
     app.router.add_get("/v1/settings", get_settings)
     app.router.add_put("/v1/settings", put_settings)
     app.router.add_delete("/v1/settings", delete_settings)

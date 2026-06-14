@@ -14,6 +14,7 @@ from aiogram.fsm.state import State, StatesGroup
 class GridWizard(StatesGroup):
     market = State()
     strategy = State()   # pick a named preset, or go manual
+    margin = State()     # how much balance to commit (template path)
     band = State()
     levels = State()
     size = State()

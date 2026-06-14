@@ -50,6 +50,23 @@ async def test_worker_launches_a_template_autosized_from_balance():
 
 
 @pytest.mark.asyncio
+async def test_worker_preview_sizes_from_the_chosen_margin():
+    svc = AppService(client_factory=lambda _u: FakeExchange({"mid": "100", "equity": "10000"}))
+    c = await _client(build_worker_app(svc, "0"))
+    try:
+        r = await c.post("/v1/grids/preview", headers={"X-User-Id": "7"},
+                         json={"market": "BTCUSDT", "template": "aggressive", "margin": "1000"})
+        assert r.status == 200
+        p = await r.json()
+        assert Decimal(p["notional"]) == Decimal("25000")          # margin 1000 × lev 25
+        assert Decimal(p["size"]) == Decimal("31.25")              # 25000 / (8 × 100)
+        assert p["leverage"] == "25" and p["levels"] == 8
+        assert Decimal(p["lower"]) == Decimal("98") and Decimal(p["upper"]) == Decimal("102")
+    finally:
+        await c.close()
+
+
+@pytest.mark.asyncio
 async def test_worker_rejects_unknown_template():
     svc = AppService(client_factory=lambda _u: FakeExchange({"mid": "100", "equity": "10000"}))
     c = await _client(build_worker_app(svc, "0"))

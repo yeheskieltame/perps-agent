@@ -41,16 +41,27 @@ class WorkerAPI:
         return await self._req("GET", f"/v1/market/{market}", user_id)
 
     async def create_grid(self, user_id: int, market: str, settings: dict | None = None,
-                          template: str | None = None) -> dict:
-        """Launch a grid. `settings` are per-launch knob overrides (band in %, levels,
-        size, leverage, ...); `template` (safe/balanced/aggressive) auto-sizes from the
-        user's balance backend-side. Returns {instance_id, effective, lower, upper}."""
+                          template: str | None = None, margin: str | None = None) -> dict:
+        """Launch a grid. `settings` are per-launch knob overrides; `template`
+        (safe/balanced/aggressive) sizes from `margin` (quote/USDT the user commits) ×
+        leverage, backend-side. Returns {instance_id, effective, lower, upper}."""
         body: dict = {"market": market}
         if settings:
             body["settings"] = settings
         if template:
             body["template"] = template
+        if margin is not None:
+            body["margin"] = str(margin)
         return await self._req("POST", "/v1/grids", user_id, body)
+
+    async def preview_grid(self, user_id: int, market: str, template: str,
+                           margin: str | None = None) -> dict:
+        """Preview a template launch (no order placed): {size, notional, leverage,
+        levels, lower, upper, margin, currency}. Lets the UI show the value first."""
+        body: dict = {"market": market, "template": template}
+        if margin is not None:
+            body["margin"] = str(margin)
+        return await self._req("POST", "/v1/grids/preview", user_id, body)
 
     async def get_settings(self, user_id: int) -> dict:
         return await self._req("GET", "/v1/settings", user_id)

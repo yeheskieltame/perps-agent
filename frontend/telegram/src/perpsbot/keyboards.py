@@ -109,6 +109,12 @@ def wiz_strategy_kb() -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
+def wiz_margin_kb() -> InlineKeyboardMarkup:
+    """How much balance to commit as margin — % of free balance, or a custom amount."""
+    return _picker("margin", [("25%", "0.25"), ("50%", "0.5"), ("75%", "0.75"), ("100%", "1")],
+                   per_row=4)
+
+
 def wiz_band_kb() -> InlineKeyboardMarkup:
     return _picker("band", [("±0.5%", "0.5"), ("±1%", "1"), ("±2%", "2"), ("±5%", "5")],
                    per_row=4)

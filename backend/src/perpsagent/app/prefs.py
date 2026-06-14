@@ -127,16 +127,27 @@ STRATEGY_TEMPLATES: dict[str, dict] = {
 }
 
 
-def autosize(template: str, free_balance, mid) -> Decimal:
-    """Base qty per level so the grid commits ~`margin` of free balance at `leverage`.
-    Floors to 6dp (never over-sizes); 0 when balance/price make it non-positive."""
+def grid_size(template: str, margin_quote, mid) -> Decimal:
+    """Base qty per level for an explicit `margin` (quote/USDT the user commits):
+    notional = margin × leverage; size = notional / (levels × price). Floors to 6dp
+    (never over-sizes); 0 when margin/price are non-positive."""
     tpl = STRATEGY_TEMPLATES[template]
-    free, price = Decimal(str(free_balance)), Decimal(str(mid))
-    if free <= 0 or price <= 0:
+    margin, price = Decimal(str(margin_quote)), Decimal(str(mid))
+    if margin <= 0 or price <= 0:
         return Decimal(0)
-    notional = free * Decimal(tpl["margin"]) * Decimal(tpl["leverage"])
-    size = notional / (Decimal(tpl["levels"]) * price)
-    return size.quantize(Decimal("0.000001"), rounding=ROUND_DOWN)
+    notional = margin * Decimal(tpl["leverage"])
+    return (notional / (Decimal(tpl["levels"]) * price)).quantize(
+        Decimal("0.000001"), rounding=ROUND_DOWN)
+
+
+def default_margin(template: str, free_balance) -> Decimal:
+    """The template's default margin = its margin fraction of free balance."""
+    return Decimal(str(free_balance)) * Decimal(STRATEGY_TEMPLATES[template]["margin"])
+
+
+def autosize(template: str, free_balance, mid) -> Decimal:
+    """Size for the template's DEFAULT margin (margin% of free balance)."""
+    return grid_size(template, default_margin(template, free_balance), mid)
 
 
 def template_settings(template: str, size: Decimal) -> dict[str, str]:

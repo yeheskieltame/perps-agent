@@ -24,7 +24,7 @@ class FakeAPI:
         if self.fail:
             raise self.fail
 
-    async def create_grid(self, uid, market, settings=None, template=None):
+    async def create_grid(self, uid, market, settings=None, template=None, margin=None):
         self.calls.append(("create", uid, market, settings, template))
         self._maybe_fail()
         # the real backend normalizes aliases before merging (app/prefs.py)
@@ -75,6 +75,12 @@ class FakeAPI:
         self.calls.append(("rename", uid, iid, name))
         self._maybe_fail()
         return {"ok": True, "name": name}
+
+    async def preview_grid(self, uid, market, template, margin=None):
+        self._maybe_fail()
+        return {"market": market, "margin": str(margin or "0"), "leverage": "5",
+                "notional": "5000", "levels": 10, "size": "0.5", "lower": "99",
+                "upper": "101", "currency": "USDT"}
 
     async def stop(self, uid, iid):
         self.calls.append(("stop", uid, iid))
@@ -261,8 +267,8 @@ async def test_401_points_to_connect():
 class ProofAPI(FakeAPI):
     """Backend with the verifiable loop on-chain — returns commit/attest tx hashes."""
 
-    async def create_grid(self, uid, market, settings=None, template=None):
-        resp = await super().create_grid(uid, market, settings, template)
+    async def create_grid(self, uid, market, settings=None, template=None, margin=None):
+        resp = await super().create_grid(uid, market, settings, template, margin)
         resp["proofs"] = {"commit": "0x" + "ab" * 32}
         return resp
 
@@ -359,9 +365,12 @@ async def test_create_grid_result_surfaces_validation_error():
     assert iid is None and "band" in text
 
 
-def test_template_confirm_text_describes_the_style():
-    out = commands.template_confirm_text("BTCUSDT", "aggressive")
-    assert "BTCUSDT" in out and "Aggressive" in out and "x25" in out and "auto-set" in out
+def test_render_template_preview_shows_computed_margin_and_size():
+    plan = {"market": "BTCUSDT", "margin": "1000", "leverage": "25", "notional": "25000",
+            "levels": 8, "size": "31.25", "lower": "98", "upper": "102", "currency": "USDT"}
+    out = commands.render_template_preview(plan, "aggressive")
+    assert "BTCUSDT" in out and "Aggressive" in out
+    assert "1,000.00" in out and "25,000.00" in out and "31.25" in out and "98" in out
 
 
 async def test_create_template_result_forwards_template_and_shows_commit():

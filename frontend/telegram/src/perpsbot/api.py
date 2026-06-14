@@ -74,6 +74,11 @@ class WorkerAPI:
     async def balance(self, user_id: int) -> dict:
         return await self._req("GET", "/v1/balance", user_id)
 
+    async def wallet(self, user_id: int) -> dict:
+        """The user's managed MNT wallet (minted on first call): {address, balance,
+        currency, faucet}. Pays the builder fee on Mantle."""
+        return await self._req("GET", "/v1/wallet", user_id)
+
     async def put_credentials(self, user_id: int, api_key: str, api_secret: str,
                               testnet: bool = True) -> dict:
         return await self._req("PUT", "/v1/credentials", user_id,

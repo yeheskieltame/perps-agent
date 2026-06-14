@@ -97,7 +97,14 @@ perpsagent-worker perpsbot` and check each leg:
 | **On-chain ATTEST + LEARN** | `/stop` the grid → reply shows **⛓ outcome attested on-chain** | attest + StrategyMemory `write` txs confirm |
 | **Signals (SENSE)** | with signal keys set, launch a grid; worker log shows fused regime (vol/funding/social/smart-money) | no `signal … skipped` for configured ones |
 | **x402 alpha API** | set `X402_PAY_TO`, enable `perpsagent-alpha`; `curl -i http://HOST:8402/v1/alpha/recall/BTCUSDT` | **HTTP 402** + `PaymentRequirements` (asset MNT); pay MNT to `PAY_TO` then retry with `{txHash}` → 200 + verified episodes |
-| **Builder fee** | set `PERPSAGENT_BUILDER_FEE>0` (wei) + `X402_PAY_TO` (treasury), close a grid | native MNT transfer operator→treasury, confirmed on mantlescan |
+| **Builder fee** | set `PERPSAGENT_BUILDER_FEE>0` (wei) + `X402_PAY_TO` (treasury); user funds their wallet (`/wallet` → `/topup` → faucet), then close a grid | native MNT transfer from the **user's** managed wallet → treasury, confirmed on mantlescan (`💸` in chat) |
+
+> **How users pay (Opsi A).** Telegram users authenticate with Bybit keys (no wallet),
+> so the bot mints each user a **managed MNT wallet** — its key sealed with the same
+> Fernet codec as the venue keys (needs `PERPSAGENT_CRED_MASTER_KEY`). `/wallet` shows
+> the address + balance, `/topup` links the Mantle Sepolia faucet. The builder fee is
+> debited from the **user's** wallet on close (falls back to operator-paid if no
+> wallet/treasury). Insufficient balance → fee skipped, never blocks the close.
 
 Full paid round-trip (402 → pay MNT → 200 + data), from the VPS:
 ```bash

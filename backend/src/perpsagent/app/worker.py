@@ -24,6 +24,8 @@ API (user identified by the `X-User-Id` header):
   PUT    /v1/credentials          {api_key, api_secret, testnet=true} -> {ok, testnet}
   GET    /v1/credentials          -> {connected, testnet, key_preview} | {connected: false}
   DELETE /v1/credentials          -> {ok}  (forgets the keys, tears down the session)
+  GET    /v1/wallet               -> {address, balance, currency, faucet}  (managed MNT
+                                  wallet, minted on first call; pays the builder fee)
 
 A request for a user this shard does not own returns 409 (the gateway should never
 send one — this is defense-in-depth). A user with no stored venue keys gets 401 on
@@ -80,9 +82,10 @@ def _cfg_from_body(body: dict, node: str, knobs: dict) -> GridConfig:
 
 
 _NO_CREDS = "no venue credentials — connect your API keys first"
+_FAUCET_URL = "https://faucet.sepolia.mantle.xyz"  # Mantle Sepolia testnet MNT faucet
 
 
-def build_worker_app(service: AppService, node: str, creds=None) -> web.Application:
+def build_worker_app(service: AppService, node: str, creds=None, wallet=None) -> web.Application:
     app = web.Application()
 
     async def healthz(_request: web.Request) -> web.Response:
@@ -231,6 +234,16 @@ def build_worker_app(service: AppService, node: str, creds=None) -> web.Applicat
         await service.disconnect(user_id)
         return web.json_response({"ok": True})
 
+    async def get_wallet(request: web.Request) -> web.Response:
+        if wallet is None:
+            raise web.HTTPServiceUnavailable(
+                reason="wallet storage not configured — set PERPSAGENT_CRED_MASTER_KEY")
+        user_id = _user_id(request)
+        address = await wallet.get_or_create(user_id)  # mint on first use
+        balance = await wallet.balance(user_id)
+        return web.json_response({"address": address, "balance": str(balance),
+                                  "currency": "MNT", "faucet": _FAUCET_URL})
+
     app.router.add_get("/healthz", healthz)
     app.router.add_post("/v1/grids", create)
     app.router.add_get("/v1/settings", get_settings)
@@ -244,6 +257,7 @@ def build_worker_app(service: AppService, node: str, creds=None) -> web.Applicat
     app.router.add_put("/v1/credentials", put_credentials)
     app.router.add_get("/v1/credentials", get_credentials)
     app.router.add_delete("/v1/credentials", delete_credentials)
+    app.router.add_get("/v1/wallet", get_wallet)
     return app
 
 
@@ -291,6 +305,8 @@ def _service_from_settings(s, router, node: str):
     a shared in-memory FakeExchange (dev/demo only).
     """
     creds_admin = None
+    wallet_admin = None
+    fee_payer = None
     factory = None
     if s.postgres_dsn:
         from ..adapters.store.postgres_store import PostgresStore
@@ -313,6 +329,12 @@ def _service_from_settings(s, router, node: str):
                                          "max_retries": s.bybit_max_retries}),
         )
         creds_admin = CredentialAdmin(store, codec)
+        # Same Fernet codec seals each user's managed MNT wallet (Opsi A) — the
+        # builder fee is then debited from the USER's wallet, not the operator.
+        from ..adapters.store.wallets import WalletAdmin
+
+        wallet_admin = WalletAdmin(store, codec, rpc_url=s.mantle_rpc or None, chain_id=s.x402_chain_id)
+        fee_payer = wallet_admin.pay
     if factory is None:  # dev/demo fallback: in-memory venue, no keys
         from ..adapters.exchanges.fake import FakeExchange
 
@@ -320,8 +342,8 @@ def _service_from_settings(s, router, node: str):
     service = AppService(store=store, client_factory=factory, router=router, node=node,
                          chain=_chain_from_settings(s), signals=_signals_from_settings(s),
                          builder_fee=s.builder_fee, fee_asset=s.fee_asset,
-                         fee_account=s.fee_account, treasury=s.x402_pay_to)
-    return service, creds_admin
+                         fee_account=s.fee_account, treasury=s.x402_pay_to, fee_payer=fee_payer)
+    return service, creds_admin, wallet_admin
 
 
 def main() -> None:
@@ -331,7 +353,7 @@ def main() -> None:
     s = Settings()
     s.assert_consistent()
     router = ShardRouter(s.shard_count)
-    service, creds_admin = _service_from_settings(s, router, s.shard_node)
+    service, creds_admin, wallet_admin = _service_from_settings(s, router, s.shard_node)
 
     async def _startup(_app):
         recovered = await service.recover()
@@ -340,7 +362,7 @@ def main() -> None:
     async def _cleanup(_app):
         await service.drain()  # let fire-then-confirm attest/memory writes land
 
-    app = build_worker_app(service, s.shard_node, creds=creds_admin)
+    app = build_worker_app(service, s.shard_node, creds=creds_admin, wallet=wallet_admin)
     app.on_startup.append(_startup)
     app.on_cleanup.append(_cleanup)
     print(f"[worker {s.shard_node}/{s.shard_count}] serving on {s.worker_host}:{s.worker_port}")

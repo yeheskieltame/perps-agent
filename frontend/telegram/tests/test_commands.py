@@ -68,6 +68,11 @@ class FakeAPI:
         self._maybe_fail()
         return {"market": market, "bid": "99.9", "ask": "100.1", "mid": "100.0"}
 
+    async def wallet(self, uid):
+        self._maybe_fail()
+        return {"address": "0x" + "ab" * 20, "balance": "1500000000000000000",
+                "currency": "MNT", "faucet": "https://faucet.sepolia.mantle.xyz"}
+
     async def balance(self, uid):
         self._maybe_fail()
         return {"equity": "73193.62", "available": "73000.00", "currency": "USDT"}
@@ -266,3 +271,20 @@ async def test_proofs_absent_when_chain_disabled():
     api = FakeAPI()                                                   # no proofs in payload
     out = await commands.grid(api, 42, "BTCUSDT")
     assert "on-chain" not in out                                     # silent, not broken
+
+
+async def test_wallet_shows_address_and_mnt_balance():
+    out = await commands.wallet(FakeAPI(), 42)
+    assert "0x" + "ab" * 20 in out and "1.5000 MNT" in out
+
+
+async def test_topup_shows_faucet_and_address():
+    out = await commands.topup(FakeAPI(), 42)
+    assert "faucet.sepolia.mantle.xyz" in out and "0x" + "ab" * 20 in out
+
+
+async def test_wallet_unavailable_is_friendly():
+    api = FakeAPI()
+    api.fail = ApiError(503, "wallet storage not configured")
+    out = await commands.wallet(api, 42)
+    assert "unavailable" in out.lower() and "503" not in out

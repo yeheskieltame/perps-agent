@@ -39,6 +39,11 @@ CREATE TABLE IF NOT EXISTS user_settings (
     settings TEXT NOT NULL,
     updated_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS wallets (
+    user_id INTEGER PRIMARY KEY,
+    ciphertext BLOB NOT NULL,
+    updated_at INTEGER
+);
 """
 _OPEN_STATES = ("INITIALIZING", "RUNNING", "REBALANCING")
 
@@ -183,6 +188,30 @@ class SqliteStore:
         with self._lock:
             self._conn.execute("DELETE FROM credentials WHERE user_id=?", (user_id,))
             self._conn.commit()
+
+    # ---- managed MNT wallets (WalletStorePort) ----
+
+    async def put_wallet(self, user_id: int, ciphertext: bytes) -> None:
+        await asyncio.to_thread(self._put_wallet, user_id, ciphertext)
+
+    def _put_wallet(self, user_id: int, ciphertext: bytes) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO wallets(user_id,ciphertext,updated_at) VALUES(?,?,?) "
+                "ON CONFLICT(user_id) DO UPDATE SET ciphertext=excluded.ciphertext, updated_at=excluded.updated_at",
+                (user_id, ciphertext, int(time.time())),
+            )
+            self._conn.commit()
+
+    async def get_wallet(self, user_id: int) -> bytes | None:
+        return await asyncio.to_thread(self._get_wallet, user_id)
+
+    def _get_wallet(self, user_id: int) -> bytes | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT ciphertext FROM wallets WHERE user_id=?", (user_id,)
+            ).fetchone()
+        return row[0] if row else None
 
     # ---- per-user strategy settings (JSON of validated knobs — app/prefs.py) ----
 

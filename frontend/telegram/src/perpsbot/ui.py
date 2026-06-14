@@ -52,6 +52,7 @@ def menu_rows(connected: bool) -> Rows:
     return [
         [("🚀 Launch grid", "d:launch"), ("⏹ Stop…", "d:stopmenu")],
         [("⚙️ Settings", "d:settings"), ("💱 Price", "d:price")],
+        [("👛 Wallet", "d:wallet"), ("💧 Top up", "d:topup")],
         [("🔄 Refresh", "d:home"), ("❓ Help", "d:help")],
         account,
     ]

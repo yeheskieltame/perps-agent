@@ -22,6 +22,8 @@ HELP = (
     "/pause INSTANCE — halt new orders\n"
     "/price MARKET — live top-of-book\n"
     "/balance — venue equity\n"
+    "/wallet — your MNT wallet (pays builder fees on Mantle)\n"
+    "/topup — fund your MNT wallet (faucet link)\n"
     "/health — backend status\n"
     "/cancel — abort the current dialog"
 )
@@ -376,6 +378,39 @@ async def balance(api, user_id: int) -> str:
     except ApiError as e:
         return _err(e)
     return f"💰 Equity <b>{b['equity']} {b['currency']}</b> · available {b['available']}"
+
+
+def _mnt(wei: str | int) -> str:
+    return f"{int(wei) / 1e18:.4f}"
+
+
+async def wallet(api, user_id: int) -> str:
+    """Show the user's managed MNT wallet — the address that pays builder fees."""
+    try:
+        w = await api.wallet(user_id)
+    except ApiError as e:
+        if e.status == 503:
+            return "👛 Wallet unavailable — the backend has no credential master key set."
+        return _err(e)
+    return (f"👛 <b>Your MNT wallet</b> — pays builder fees on Mantle\n"
+            f"<code>{w['address']}</code>\n"
+            f"Balance: <b>{_mnt(w.get('balance', 0))} MNT</b>\n\n"
+            f"Low on MNT? <code>/topup</code> to fund it.")
+
+
+async def topup(api, user_id: int) -> str:
+    """How to fund the managed wallet: faucet link + the deposit address."""
+    try:
+        w = await api.wallet(user_id)
+    except ApiError as e:
+        if e.status == 503:
+            return "👛 Wallet unavailable — the backend has no credential master key set."
+        return _err(e)
+    return (f"💧 <b>Top up your MNT wallet</b> (testnet)\n"
+            f"1. Open the faucet: {w.get('faucet')}\n"
+            f"2. Paste your address:\n<code>{w['address']}</code>\n"
+            f"3. Claim testnet MNT — it pays your builder fees on Mantle.\n\n"
+            f"Balance now: <b>{_mnt(w.get('balance', 0))} MNT</b> · re-check with /wallet")
 
 
 async def health(api) -> str:

@@ -132,6 +132,10 @@ async def on_nav(cb: CallbackQuery, api: WorkerAPI, state: FSMContext,
         await _show_settings(cb, api)
         await cb.answer("Settings reset to defaults.")
         return
+    elif action == "wallet":
+        await _edit(cb, await commands.wallet(api, uid), _kb(ui.back_rows()))
+    elif action == "topup":
+        await _edit(cb, await commands.topup(api, uid), _kb(ui.back_rows()))
     elif action == "help":
         await _edit(cb, commands.HELP, _kb(ui.back_rows()))
     elif action == "connect":
@@ -275,6 +279,16 @@ async def on_balance(m: Message, api: WorkerAPI) -> None:
     await m.answer(await commands.balance(api, m.from_user.id))
 
 
+@router.message(Command("wallet"))
+async def on_wallet(m: Message, api: WorkerAPI) -> None:
+    await m.answer(await commands.wallet(api, m.from_user.id))
+
+
+@router.message(Command("topup"))
+async def on_topup(m: Message, api: WorkerAPI) -> None:
+    await m.answer(await commands.topup(api, m.from_user.id))
+
+
 @router.message(Command("health"))
 async def on_health(m: Message, api: WorkerAPI) -> None:
     await m.answer(await commands.health(api))
@@ -288,6 +302,8 @@ COMMAND_MENU = [
     ("status", "your grids"),
     ("stop", "stop a grid"),
     ("balance", "venue equity"),
+    ("wallet", "your MNT wallet (pays fees)"),
+    ("topup", "fund your MNT wallet"),
     ("price", "top-of-book"),
     ("connect", "link Bybit API keys (DM)"),
     ("help", "all commands"),

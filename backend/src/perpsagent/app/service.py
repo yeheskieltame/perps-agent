@@ -65,7 +65,7 @@ class AppService:
                  client_factory: Callable[[int], object] | None = None,
                  router=None, node=None, chain=None, signals=None,
                  builder_fee: int = 0, fee_asset: str = "", fee_account: str = "",
-                 treasury: str = "") -> None:
+                 treasury: str = "", fee_payer=None) -> None:
         if exchange is None and client_factory is None:
             raise ValueError("AppService needs an `exchange` or a `client_factory`")
         self._exchange = exchange
@@ -94,6 +94,9 @@ class AppService:
         self._fee_asset = fee_asset
         self._fee_account = fee_account
         self._treasury = treasury  # native-MNT fee recipient
+        # Debit the fee from the USER's managed wallet (Opsi A): fee_payer(user_id,
+        # to, amount) -> tx hash. None → fall back to the operator-paid native path.
+        self._fee_payer = fee_payer
 
     def _on_shard(self, user_id: int) -> bool:
         return self._router is None or self._node is None or self._router.owns(user_id, self._node)
@@ -142,39 +145,42 @@ class AppService:
         # ATTEST the verified outcome + LEARN (write StrategyMemory). Post-trade writes
         # are fire-then-confirm in the chain client — they don't block the close path,
         # and a revert is logged, never raised (mirrors agent/loop.close_and_learn).
-        if self._chain is None or engine is None:
-            return
-        outcome = engine.outcome()
-        try:
-            self._proofs.setdefault(instance_id, {})["attest"] = await self._chain.attest(instance_id, outcome)
-        except Exception as e:  # noqa: BLE001 — one failed write must not break the close
-            print(f"  ! attest failed ({instance_id}): {e}")
-        regime = self._regimes.pop(instance_id, None)
-        if regime is not None:
+        if self._chain is not None and engine is not None:
+            outcome = engine.outcome()
             try:
-                self._proofs.setdefault(instance_id, {})["memory"] = await self._chain.write_memory(
-                    to_record(regime, engine.cfg, outcome))
-            except Exception as e:  # noqa: BLE001
-                print(f"  ! write_memory failed ({instance_id}): {e}")
-        await self._settle_builder_fee(instance_id)
+                self._proofs.setdefault(instance_id, {})["attest"] = await self._chain.attest(instance_id, outcome)
+            except Exception as e:  # noqa: BLE001 — one failed write must not break the close
+                print(f"  ! attest failed ({instance_id}): {e}")
+            regime = self._regimes.pop(instance_id, None)
+            if regime is not None:
+                try:
+                    self._proofs.setdefault(instance_id, {})["memory"] = await self._chain.write_memory(
+                        to_record(regime, engine.cfg, outcome))
+                except Exception as e:  # noqa: BLE001
+                    print(f"  ! write_memory failed ({instance_id}): {e}")
+        # Builder fee runs regardless of the chain (the user-wallet path is independent).
+        await self._settle_builder_fee(user_id, instance_id)
 
-    async def _settle_builder_fee(self, instance_id: str) -> None:
-        """Settle the flat builder fee on-chain. Two modes:
-        - ERC-20: from the operator's Vault bond → treasury (Vault.settleFee), when a
-          fee asset + Vault are configured;
-        - native MNT (default on Mantle): the operator pays the fee straight to the
-          treasury — no token, no bond.
-        A revert (insufficient funds, no bond) is logged and skipped — billing never
-        blocks a clean close."""
-        if self._builder_fee <= 0 or self._chain is None:
+    async def _settle_builder_fee(self, user_id: int, instance_id: str) -> None:
+        """Settle the flat builder fee on-chain. Precedence:
+        1. user wallet (Opsi A): debit the fee from the USER's managed MNT wallet →
+           treasury — the user pays, non-custodially funded from the faucet;
+        2. ERC-20 Vault: from the operator's bond → treasury (Vault.settleFee);
+        3. operator native MNT: the operator pays the fee straight to the treasury.
+        A revert (insufficient funds, no wallet/bond) is logged and skipped — billing
+        never blocks a clean close."""
+        if self._builder_fee <= 0:
             return
         try:
-            if self._fee_asset and getattr(self._chain, "vault", None) is not None:
+            if self._fee_payer is not None and self._treasury:
+                self._proofs.setdefault(instance_id, {})["fee"] = await self._fee_payer(
+                    user_id, self._treasury, self._builder_fee)
+            elif self._fee_asset and getattr(self._chain, "vault", None) is not None:
                 payer = self._fee_account or getattr(getattr(self._chain, "acct", None), "address", "")
                 if payer:
                     self._proofs.setdefault(instance_id, {})["fee"] = await self._chain.settle_fee(
                         payer, self._fee_asset, self._builder_fee)
-            elif self._treasury and hasattr(self._chain, "send_native"):
+            elif self._treasury and self._chain is not None and hasattr(self._chain, "send_native"):
                 self._proofs.setdefault(instance_id, {})["fee"] = await self._chain.send_native(
                     self._treasury, self._builder_fee)
         except Exception as e:  # noqa: BLE001 — insufficient funds / revert is non-fatal

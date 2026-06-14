@@ -43,6 +43,11 @@ CREATE TABLE IF NOT EXISTS user_settings (
     settings TEXT NOT NULL,
     updated_at BIGINT
 );
+CREATE TABLE IF NOT EXISTS wallets (
+    user_id BIGINT PRIMARY KEY,
+    ciphertext BYTEA NOT NULL,
+    updated_at BIGINT
+);
 """
 
 
@@ -145,6 +150,20 @@ class PostgresStore:
     async def delete_credentials(self, user_id: int) -> None:
         pool = await self._ensure()
         await pool.execute("DELETE FROM credentials WHERE user_id=$1", user_id)
+
+    # ---- managed MNT wallets (WalletStorePort) ----
+
+    async def put_wallet(self, user_id: int, ciphertext: bytes) -> None:
+        pool = await self._ensure()
+        await pool.execute(
+            "INSERT INTO wallets(user_id,ciphertext,updated_at) VALUES($1,$2,$3) "
+            "ON CONFLICT(user_id) DO UPDATE SET ciphertext=EXCLUDED.ciphertext, updated_at=EXCLUDED.updated_at",
+            user_id, ciphertext, int(time.time()),
+        )
+
+    async def get_wallet(self, user_id: int) -> bytes | None:
+        pool = await self._ensure()
+        return await pool.fetchval("SELECT ciphertext FROM wallets WHERE user_id=$1", user_id)
 
     # ---- per-user strategy settings (JSON of validated knobs — app/prefs.py) ----
 

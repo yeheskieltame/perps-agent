@@ -31,8 +31,9 @@ class GridCB(CallbackData, prefix="g"):
 
 
 class SetCB(CallbackData, prefix="s"):
-    kind: str    # cycle | type
+    kind: str    # open (show value picker) | set (apply val) | custom (prompt typing)
     key: str
+    val: str = ""
 
 
 def _menu_row(kb: InlineKeyboardBuilder) -> None:
@@ -59,7 +60,7 @@ def main_menu_kb(connected: bool) -> InlineKeyboardMarkup:
     kb.row(_b("🚀 New Grid", "new_grid"))                       # primary, full width
     kb.row(_b("📊 My Grids", "grids"), _b("📜 History", "history"))
     kb.row(_b("👛 Wallet", "wallet"), _b("💰 Balance", "balance"), _b("💱 Price", "price"))
-    kb.row(_b("⚙️ Settings", "settings"), _b("💧 Top up", "topup"))
+    kb.row(_b("⚙️ Config", "settings"), _b("💧 Top up", "topup"))
     if connected:
         kb.row(_b("🔑 Re-connect", "connect"), _b("🗑 Disconnect", "disconnect"))
     else:
@@ -196,19 +197,55 @@ def price_result_kb(market: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-# ── settings (this branch's per-user knobs) ──────────────────────────────────
+# ── config (per-user knobs), set entirely by tapping — no typing required ────
 
-# Enumerable knobs cycle on tap; numeric ones prompt for `/set KEY VALUE`.
-_CYCLE = {"bias", "timeframe", "recenter"}
+# Friendly labels + tap-to-set presets per knob. Every picker also offers ✏️ Custom
+# (type /set KEY VALUE) for anything off-menu; the backend validates either way.
+KNOB_LABEL = {
+    "band": "Range %", "levels": "Steps", "size": "Size/step", "leverage": "Leverage",
+    "max_inventory": "Max inventory", "max_drawdown": "Max loss", "account_dd": "Account stop",
+    "tp": "Take-profit", "trail": "Trailing", "trail_arm": "Trail arm", "bias": "Bias",
+    "timeframe": "Timeframe", "recenter": "Re-center",
+}
+
+KNOB_PRESETS: dict[str, list[tuple[str, str]]] = {
+    "band": [("±0.5%", "0.5"), ("±1%", "1"), ("±2%", "2"), ("±5%", "5")],
+    "levels": [("6", "6"), ("10", "10"), ("20", "20"), ("50", "50")],
+    "size": [("0.001", "0.001"), ("0.005", "0.005"), ("0.01", "0.01"), ("0.05", "0.05")],
+    "leverage": [("x1", "1"), ("x5", "5"), ("x10", "10"), ("x15", "15"), ("x20", "20"), ("x25", "25")],
+    "bias": [("Neutral", "neutral"), ("Long", "long"), ("Short", "short")],
+    "timeframe": [("1m", "1m"), ("5m", "5m"), ("15m", "15m"), ("1h", "1h"), ("4h", "4h"), ("1d", "1d")],
+    "recenter": [("Auto", "auto"), ("15s", "15"), ("30s", "30"), ("60s", "60")],
+    "max_inventory": [("Auto", "0")],
+    "max_drawdown": [("Off", "0"), ("10", "10"), ("50", "50"), ("100", "100")],
+    "account_dd": [("Off", "0"), ("50", "50"), ("100", "100"), ("500", "500")],
+    "tp": [("Off", "0"), ("5", "5"), ("10", "10"), ("50", "50")],
+    "trail": [("Off", "0"), ("0.2", "0.2"), ("0.3", "0.3"), ("0.5", "0.5")],
+    "trail_arm": [("Off", "0"), ("5", "5"), ("10", "10")],
+}
 
 
-def settings_kb(settings: dict) -> InlineKeyboardMarkup:
-    """A button per knob — cycle (enumerable) or type-prompt (numeric) — + reset."""
+def config_kb(settings: dict) -> InlineKeyboardMarkup:
+    """One button per knob (shows its current value) → opens a value picker. + Reset."""
     kb = InlineKeyboardBuilder()
     for key in settings:
-        kind = "cycle" if key in _CYCLE else "type"
-        kb.button(text=f"{key}: {settings[key]}", callback_data=SetCB(kind=kind, key=key))
+        label = KNOB_LABEL.get(key, key)
+        kb.button(text=f"{label}: {settings[key]}", callback_data=SetCB(kind="open", key=key))
     kb.adjust(2)
-    kb.row(InlineKeyboardButton(text="↩️ Reset", callback_data=MenuCB(action="reset").pack()))
+    kb.row(InlineKeyboardButton(text="↩️ Reset all", callback_data=MenuCB(action="reset").pack()))
     _menu_row(kb)
+    return kb.as_markup()
+
+
+def setting_picker_kb(key: str, current: str) -> InlineKeyboardMarkup:
+    """Tap a preset value (current marked ✅), ✏️ Custom to type, or ⬅️ Back to config."""
+    kb = InlineKeyboardBuilder()
+    for label, val in KNOB_PRESETS.get(key, []):
+        mark = "✅ " if str(val) == str(current) else ""
+        kb.button(text=f"{mark}{label}", callback_data=SetCB(kind="set", key=key, val=val))
+    kb.adjust(3)
+    kb.row(
+        InlineKeyboardButton(text="✏️ Custom", callback_data=SetCB(kind="custom", key=key).pack()),
+        InlineKeyboardButton(text="⬅️ Back", callback_data=MenuCB(action="settings").pack()),
+    )
     return kb.as_markup()

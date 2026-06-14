@@ -18,8 +18,8 @@ HELP = (
     "/disconnect — forget your keys\n"
     "/grid MARKET [overrides] — launch a grid with YOUR settings\n"
     "    e.g. <code>/grid BTCUSDT</code> or <code>/grid MNTUSDT band=1.5 lev=25</code>\n"
-    "/settings — your strategy settings (band, leverage, take-profit, ...)\n"
-    "/set KEY VALUE — change one setting, e.g. <code>/set leverage 25</code>\n"
+    "/config — tune parameters by tapping (leverage, range, take-profit, ...)\n"
+    "/set KEY VALUE — type one value, e.g. <code>/set leverage 25</code>\n"
     "/set reset — back to defaults\n"
     "/status — your grids (state, pnl, fills)\n"
     "/stop INSTANCE — cancel orders, close the grid\n"
@@ -146,7 +146,7 @@ GRID_USAGE = ("Usage: <code>/grid MARKET [KEY=VALUE ...]</code>\n"
 def settings_card(settings: dict, customized: list[str] | None = None) -> str:
     """Render the grouped settings card. Keys the user changed get a ✏️ marker."""
     custom = set(customized or [])
-    lines = ["⚙️ <b>Advanced settings</b> — fine-tune the engine.",
+    lines = ["⚙️ <b>Config</b> — tune the engine. <b>Tap any value to change it.</b>",
              "<i>New here? You can ignore this — the New Grid presets pick good values.</i>"]
     shown = set()
     for group, keys in SETTING_GROUPS:
@@ -346,6 +346,16 @@ async def price_toast(api, user_id: int, market: str) -> str:
     except ApiError as e:
         return f"{market}: {e.detail or e.status}"
     return f"{m['market']}  mid {m['mid']}  (bid {m['bid']} / ask {m['ask']})"
+
+
+async def set_setting(api, user_id: int, key: str, val: str) -> tuple[str, dict | None]:
+    """Apply one knob value (from a button tap). Returns (toast, new_settings|None).
+    The backend validates; an invalid value comes back as a friendly toast."""
+    try:
+        resp = await api.put_settings(user_id, {key: val})
+    except ApiError as e:
+        return (f"❌ {e.detail or e.status}", None)
+    return (f"{key} → {val} ✓", resp.get("settings", {}))
 
 
 async def cycle_setting(api, user_id: int, key: str, next_value) -> tuple[str, dict]:

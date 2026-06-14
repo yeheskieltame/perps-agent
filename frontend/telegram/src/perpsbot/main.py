@@ -20,13 +20,13 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, CallbackQuery, Message
 
-from . import commands, ui
+from . import commands
 from .api import WorkerAPI
 from .config import BotSettings, is_allowed
 from .keyboards import (
-    GridCB, MenuCB, PriceCB, SetCB, WizCB,
-    back_kb, grids_kb, launched_kb, main_menu_kb, price_kb, price_result_kb,
-    settings_kb, stop_confirm_kb, wiz_band_kb, wiz_confirm_kb, wiz_levels_kb,
+    KNOB_LABEL, GridCB, MenuCB, PriceCB, SetCB, WizCB,
+    back_kb, config_kb, grids_kb, launched_kb, main_menu_kb, price_kb, price_result_kb,
+    setting_picker_kb, stop_confirm_kb, wiz_band_kb, wiz_confirm_kb, wiz_levels_kb,
     wiz_market_kb, wiz_size_kb, wiz_strategy_kb,
 )
 from .wizard import (
@@ -44,7 +44,7 @@ _COMMANDS = [
     BotCommand(command="topup", description="💧 Fund your MNT wallet"),
     BotCommand(command="balance", description="💰 Venue equity"),
     BotCommand(command="price", description="💱 Live top-of-book"),
-    BotCommand(command="settings", description="⚙️ Strategy settings"),
+    BotCommand(command="config", description="⚙️ Config — tap to tune parameters"),
     BotCommand(command="connect", description="🔑 Link Bybit API keys (DM)"),
     BotCommand(command="help", description="ℹ️ Help"),
 ]
@@ -217,11 +217,11 @@ async def cmd_topup(message: Message, api: WorkerAPI) -> None:
     await message.answer(await commands.topup(api, _uid(message)), reply_markup=back_kb("topup"))
 
 
-@router.message(Command("settings"))
-async def cmd_settings(message: Message, api: WorkerAPI) -> None:
+@router.message(Command("config", "settings"))
+async def cmd_config(message: Message, api: WorkerAPI) -> None:
     resp = await api.get_settings(_uid(message))
     s = resp.get("settings", {})
-    await message.answer(commands.settings_card(s, resp.get("customized")), reply_markup=settings_kb(s))
+    await message.answer(commands.settings_card(s, resp.get("customized")), reply_markup=config_kb(s))
 
 
 @router.message(Command("set"))
@@ -348,29 +348,40 @@ async def cb_menu(cb: CallbackQuery, api: WorkerAPI, state: FSMContext,
     elif action == "settings":
         resp = await api.get_settings(uid)
         s = resp.get("settings", {})
-        await _edit(cb, commands.settings_card(s, resp.get("customized")), settings_kb(s))
+        await _edit(cb, commands.settings_card(s, resp.get("customized")), config_kb(s))
     elif action == "reset":
         resp = await api.reset_settings(uid)
         s = resp.get("settings", {})
-        await _edit(cb, "↩️ Settings reset.\n\n" + commands.settings_card(s), settings_kb(s))
+        await _edit(cb, "↩️ Config reset to defaults.\n\n" + commands.settings_card(s), config_kb(s))
     elif action == "help":
         await _edit(cb, commands.HELP, back_kb())
 
 
 # ── settings cycle / type ────────────────────────────────────────────────────
 
-@router.callback_query(SetCB.filter(F.kind == "cycle"))
-async def cb_setting_cycle(cb: CallbackQuery, api: WorkerAPI, callback_data: SetCB) -> None:
-    toast, new = await commands.cycle_setting(api, _uid(cb), callback_data.key, ui.next_value)
-    await cb.answer(toast)
-    if new:
-        await _edit(cb, commands.settings_card(new), settings_kb(new))
-
-
-@router.callback_query(SetCB.filter(F.kind == "type"))
-async def cb_setting_type(cb: CallbackQuery, callback_data: SetCB) -> None:
+@router.callback_query(SetCB.filter(F.kind == "open"))
+async def cb_setting_open(cb: CallbackQuery, api: WorkerAPI, callback_data: SetCB) -> None:
+    await cb.answer()
+    s = (await api.get_settings(_uid(cb))).get("settings", {})
     key = callback_data.key
-    await cb.answer(f"Type:  /set {key} VALUE\ne.g.  /set {key} 0.5", show_alert=True)
+    cur = s.get(key, "")
+    await _edit(cb, f"⚙️ <b>{KNOB_LABEL.get(key, key)}</b> — now: <b>{cur}</b>\nTap a value:",
+                setting_picker_kb(key, cur))
+
+
+@router.callback_query(SetCB.filter(F.kind == "set"))
+async def cb_setting_set(cb: CallbackQuery, api: WorkerAPI, callback_data: SetCB) -> None:
+    toast, new = await commands.set_setting(api, _uid(cb), callback_data.key, callback_data.val)
+    await cb.answer(toast, show_alert=new is None)   # alert only on error
+    if new is not None:
+        await _edit(cb, commands.settings_card(new), config_kb(new))
+
+
+@router.callback_query(SetCB.filter(F.kind == "custom"))
+async def cb_setting_custom(cb: CallbackQuery, callback_data: SetCB) -> None:
+    key = callback_data.key
+    await cb.answer(f"To type a custom value:\n/set {key} VALUE\ne.g.  /set {key} 0.5",
+                    show_alert=True)
 
 
 # ── price picker ─────────────────────────────────────────────────────────────

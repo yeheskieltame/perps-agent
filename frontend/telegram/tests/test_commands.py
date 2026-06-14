@@ -173,7 +173,7 @@ async def test_set_saves_one_key_and_reset_restores():
 
 async def test_set_without_args_shows_card_and_bad_value_is_friendly():
     api = FakeAPI()
-    assert "Advanced settings" in await commands.set_value(api, 42, "")
+    assert "Config" in await commands.set_value(api, 42, "")
     assert "Usage" in await commands.set_value(api, 42, "leverage")      # value missing
     api.fail = ApiError(400, "unknown setting 'banana' — valid: band, levels, ...")
     out = await commands.set_value(api, 42, "banana 1")
@@ -367,3 +367,16 @@ async def test_clear_stopped_note():
     api.cleared = 2
     assert "Cleared 2" in await commands.clear_stopped(api, 42)
     assert "Nothing to clear" in await commands.clear_stopped(FakeAPI(), 42)
+
+
+async def test_set_setting_applies_by_tap():
+    api = FakeAPI()
+    toast, new = await commands.set_setting(api, 42, "leverage", "10")
+    assert "leverage → 10" in toast and new is not None and new["leverage"] == "10"
+
+
+async def test_set_setting_invalid_is_a_toast_not_a_crash():
+    api = FakeAPI()
+    api.fail = ApiError(400, "leverage: must be in [1, 100]")
+    toast, new = await commands.set_setting(api, 42, "leverage", "999")
+    assert new is None and "leverage" in toast

@@ -64,7 +64,8 @@ class AppService:
     def __init__(self, exchange=None, store=None,
                  client_factory: Callable[[int], object] | None = None,
                  router=None, node=None, chain=None, signals=None,
-                 builder_fee: int = 0, fee_asset: str = "", fee_account: str = "") -> None:
+                 builder_fee: int = 0, fee_asset: str = "", fee_account: str = "",
+                 treasury: str = "") -> None:
         if exchange is None and client_factory is None:
             raise ValueError("AppService needs an `exchange` or a `client_factory`")
         self._exchange = exchange
@@ -92,6 +93,7 @@ class AppService:
         self._builder_fee = int(builder_fee)
         self._fee_asset = fee_asset
         self._fee_account = fee_account
+        self._treasury = treasury  # native-MNT fee recipient
 
     def _on_shard(self, user_id: int) -> bool:
         return self._router is None or self._node is None or self._router.owns(user_id, self._node)
@@ -157,18 +159,25 @@ class AppService:
         await self._settle_builder_fee(instance_id)
 
     async def _settle_builder_fee(self, instance_id: str) -> None:
-        """Settle the flat builder fee on-chain (operator bond → treasury). No-op
-        unless a fee is configured and the chain exposes a Vault. A revert (e.g. no
-        bond deposited) is logged and skipped — billing never blocks a clean close."""
-        if self._builder_fee <= 0 or getattr(self._chain, "vault", None) is None or not self._fee_asset:
-            return
-        payer = self._fee_account or getattr(getattr(self._chain, "acct", None), "address", "")
-        if not payer:
+        """Settle the flat builder fee on-chain. Two modes:
+        - ERC-20: from the operator's Vault bond → treasury (Vault.settleFee), when a
+          fee asset + Vault are configured;
+        - native MNT (default on Mantle): the operator pays the fee straight to the
+          treasury — no token, no bond.
+        A revert (insufficient funds, no bond) is logged and skipped — billing never
+        blocks a clean close."""
+        if self._builder_fee <= 0 or self._chain is None:
             return
         try:
-            self._proofs.setdefault(instance_id, {})["fee"] = await self._chain.settle_fee(
-                payer, self._fee_asset, self._builder_fee)
-        except Exception as e:  # noqa: BLE001 — insufficient bond / revert is non-fatal
+            if self._fee_asset and getattr(self._chain, "vault", None) is not None:
+                payer = self._fee_account or getattr(getattr(self._chain, "acct", None), "address", "")
+                if payer:
+                    self._proofs.setdefault(instance_id, {})["fee"] = await self._chain.settle_fee(
+                        payer, self._fee_asset, self._builder_fee)
+            elif self._treasury and hasattr(self._chain, "send_native"):
+                self._proofs.setdefault(instance_id, {})["fee"] = await self._chain.send_native(
+                    self._treasury, self._builder_fee)
+        except Exception as e:  # noqa: BLE001 — insufficient funds / revert is non-fatal
             print(f"  ! builder-fee settle skipped ({instance_id}): {e}")
 
     async def pause_grid(self, user_id: int, instance_id: str) -> None:

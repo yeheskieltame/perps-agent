@@ -111,3 +111,34 @@ async def test_builder_fee_revert_is_non_fatal():
     iid = await svc.create_grid(7, _cfg())
     await svc.stop_grid(7, iid)                            # must not raise
     assert "fee" not in svc.proofs(iid)
+
+
+class NativeChain(MemoryChain):
+    """MemoryChain that pays a native MNT fee (no Vault, no ERC-20)."""
+
+    def __init__(self):
+        super().__init__()
+        self.sends: list = []
+
+    async def send_native(self, to, amount):
+        self.sends.append((to, amount))
+        return self._txhash()
+
+
+@pytest.mark.asyncio
+async def test_builder_fee_native_mnt_default_path():
+    chain = NativeChain()                                  # no .vault attr → native path
+    svc = _fee_svc(chain, builder_fee=1000, treasury="0xTreasury")  # no fee_asset
+    iid = await svc.create_grid(7, _cfg())
+    await svc.stop_grid(7, iid)
+    assert chain.sends == [("0xTreasury", 1000)]           # operator → treasury, in MNT
+    assert "fee" in svc.proofs(iid)
+
+
+@pytest.mark.asyncio
+async def test_builder_fee_native_needs_a_treasury():
+    chain = NativeChain()
+    svc = _fee_svc(chain, builder_fee=1000)                # treasury unset → skip
+    iid = await svc.create_grid(7, _cfg())
+    await svc.stop_grid(7, iid)
+    assert chain.sends == [] and "fee" not in svc.proofs(iid)

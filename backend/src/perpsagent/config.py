@@ -80,6 +80,10 @@ class Settings(BaseSettings):
     x402_chain_id: int = 5003
     x402_price: str = "10000"      # atomic units (USDC 6dp -> $0.01/call)
     x402_facilitator_url: str = ""
+    # Native-MNT settlement: pay MNT directly, verified on-chain (Mantle's gas token
+    # isn't an EIP-3009 ERC-20, so the gasless "exact" scheme can't move it). Default
+    # on — set false only to use an EIP-3009 ERC-20 via a facilitator instead.
+    x402_native: bool = True
     alpha_port: int = 8402
     alpha_cache_ttl_s: float = 5.0  # TTL for regime/recall responses (0 disables)
     redis_url: str = ""             # shared alpha cache across replicas; empty = in-process

@@ -11,11 +11,16 @@ Implements the x402 flow (HTTP 402 Payment Required, scheme "exact", EVM):
      - "deferred":    verified now, batch-settled later (dev default)
    and attach `X-PAYMENT-RESPONSE: base64(result)`.
 
-Defaults target Mantle (network "mantle-sepolia", chainId 5003); asset = the USDC
-token address on the target chain (configure). Replay-protected by nonce.
+Defaults target Mantle (network "mantle-sepolia", chainId 5003). Two settlement modes:
+- "exact" (ERC-20, above): asset = an EIP-3009 token address; verified by signature.
+- "mnt-native" (default on Mantle): asset = native MNT — the client pays MNT directly
+  and we VERIFY the transfer on-chain (Mantle's gas token isn't an EIP-3009 ERC-20, so
+  the gasless "exact" scheme can't move it; this needs no facilitator and no token).
+Replay-protected by nonce / payment txHash.
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import time
@@ -23,6 +28,12 @@ from typing import Any
 
 X402_VERSION = 1
 SCHEME = "exact"
+# Mantle's gas token (MNT) is NOT an EIP-3009 ERC-20, so the gasless "exact" scheme
+# can't move it. This scheme settles by having the client pay MNT directly and the
+# server VERIFY the transfer on-chain — a self-contained pay-per-call that needs no
+# facilitator and no token deploy. Non-standard (won't interop with off-the-shelf
+# x402 clients), but real on-chain MNT payment on Mantle today.
+SCHEME_NATIVE = "mnt-native"
 
 _EIP712_TYPES = {
     "EIP712Domain": [
@@ -85,6 +96,8 @@ class X402Gateway:
         facilitator_url: str | None = None,
         settler_rpc: str | None = None,
         settler_key: str | None = None,
+        native: bool = False,
+        rpc_url: str | None = None,
     ) -> None:
         self.pay_to = pay_to
         self.asset = asset
@@ -97,13 +110,16 @@ class X402Gateway:
         self.facilitator_url = facilitator_url
         self.settler_rpc = settler_rpc
         self.settler_key = settler_key
+        # Native-MNT mode: pay-by-transfer, verified on-chain via `rpc_url`.
+        self.native = native
+        self.rpc_url = rpc_url
         self._used_nonces: set[str] = set()
 
     # ---- challenge ----
 
     def requirements(self, resource: str, price: str | None = None, description: str = "") -> dict:
         return {
-            "scheme": SCHEME,
+            "scheme": SCHEME_NATIVE if self.native else SCHEME,
             "network": self.network,
             "maxAmountRequired": str(price or self.default_price),
             "resource": resource,
@@ -112,7 +128,8 @@ class X402Gateway:
             "payTo": self.pay_to,
             "maxTimeoutSeconds": self.max_timeout_seconds,
             "asset": self.asset,
-            "extra": {"name": self.asset_name, "version": self.asset_version},
+            "extra": ({"symbol": "MNT", "decimals": 18} if self.native
+                      else {"name": self.asset_name, "version": self.asset_version}),
         }
 
     def challenge(self, resource: str, price: str | None = None, error: str = "X-PAYMENT header is required") -> dict:
@@ -174,7 +191,48 @@ class X402Gateway:
         except Exception as e:  # malformed payload
             return False, f"malformed payment: {e}"
 
+    # ---- native MNT verification (verify the on-chain transfer the client made) ----
+
+    def _fetch_tx(self, tx_hash: str) -> tuple[str | None, int, int]:
+        """(to, value_wei, status) for a native tx. Split out so tests can stub it."""
+        from web3 import Web3
+
+        w3 = Web3(Web3.HTTPProvider(self.rpc_url))
+        tx = w3.eth.get_transaction(tx_hash)
+        rcpt = w3.eth.get_transaction_receipt(tx_hash)
+        return (tx["to"], int(tx["value"]), int(rcpt["status"]) if rcpt is not None else 0)
+
+    def _verify_native_sync(self, payment: dict, req: dict) -> tuple[bool, str]:
+        try:
+            if payment.get("scheme") != SCHEME_NATIVE or payment.get("network") != self.network:
+                return False, "scheme/network mismatch"
+            payload = payment.get("payload", {})
+            tx_hash = str(payload.get("txHash") or payload.get("transaction") or "")
+            if not tx_hash:
+                return False, "missing payment txHash"
+            key = tx_hash.lower()
+            if key in self._used_nonces:
+                return False, "tx already used (replay)"
+            if not self.rpc_url:
+                return False, "native verification needs an RPC url"
+            to, value, status = self._fetch_tx(tx_hash)
+            if status != 1:
+                return False, "payment tx not confirmed"
+            if to is None or str(to).lower() != self.pay_to.lower():
+                return False, "payTo mismatch"
+            if value < int(req["maxAmountRequired"]):
+                return False, "insufficient amount"
+            self._used_nonces.add(key)
+            return True, "ok"
+        except Exception as e:  # unknown tx / RPC error
+            return False, f"native verify failed: {e}"
+
+    async def verify_native(self, payment: dict, req: dict) -> tuple[bool, str]:
+        return await asyncio.to_thread(self._verify_native_sync, payment, req)
+
     async def verify(self, payment: dict, req: dict) -> tuple[bool, str]:
+        if self.native:
+            return await self.verify_native(payment, req)
         if self.facilitator_url:
             return await self._facilitator("verify", payment, req)
         return self.verify_local(payment, req)
@@ -182,7 +240,13 @@ class X402Gateway:
     # ---- settlement ----
 
     async def settle(self, payment: dict, req: dict) -> dict:
-        payer = str(payment.get("payload", {}).get("authorization", {}).get("from", ""))
+        payload = payment.get("payload", {})
+        payer = str(payload.get("from", "") or payload.get("authorization", {}).get("from", ""))
+        if self.native:
+            # Payment already happened on-chain; settlement = echo the verified tx hash.
+            tx = str(payload.get("txHash") or payload.get("transaction") or "")
+            return {"success": True, "network": self.network, "payer": payer,
+                    "transaction": tx, "mode": "native"}
         if self.facilitator_url:
             ok, info = await self._facilitator("settle", payment, req)
             return {"success": ok, "network": self.network, "payer": payer, "transaction": info if ok else None,

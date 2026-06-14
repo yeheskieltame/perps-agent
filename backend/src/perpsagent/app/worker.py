@@ -319,8 +319,8 @@ def _service_from_settings(s, router, node: str):
         factory = lambda _uid: FakeExchange({"mid": "100", "tick": "0.1"})  # noqa: E731
     service = AppService(store=store, client_factory=factory, router=router, node=node,
                          chain=_chain_from_settings(s), signals=_signals_from_settings(s),
-                         builder_fee=s.builder_fee, fee_asset=(s.fee_asset or s.x402_asset),
-                         fee_account=s.fee_account)
+                         builder_fee=s.builder_fee, fee_asset=s.fee_asset,
+                         fee_account=s.fee_account, treasury=s.x402_pay_to)
     return service, creds_admin
 
 

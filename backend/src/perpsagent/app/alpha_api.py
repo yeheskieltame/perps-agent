@@ -159,11 +159,15 @@ def main() -> None:
     s = Settings()
     gateway = X402Gateway(
         pay_to=s.x402_pay_to or "0x" + "00" * 20,
-        asset=s.x402_asset or "0x" + "00" * 20,
+        # Native MNT: pay the gas token directly, verified on-chain via the Mantle RPC.
+        # ERC-20 mode (x402_native=false): an EIP-3009 token address via a facilitator.
+        asset=("MNT" if s.x402_native else (s.x402_asset or "0x" + "00" * 20)),
         network=s.x402_network,
         chain_id=s.x402_chain_id,
         default_price=s.x402_price,
         facilitator_url=s.x402_facilitator_url or None,
+        native=s.x402_native,
+        rpc_url=s.mantle_rpc or None,
     )
     cache: CachePort | None = None
     if s.redis_url:  # shared cache across replicas
@@ -172,8 +176,8 @@ def main() -> None:
         cache = RedisCache(s.redis_url, s.alpha_cache_ttl_s)
     chain = _alpha_chain(s)
     live = type(chain).__name__ == "MantleChainClient"
-    print(f"[alpha] serving on :{s.alpha_port}  recall={'on-chain' if live else 'in-memory'} · "
-          f"settle={'facilitator' if s.x402_facilitator_url else 'local-verify'}")
+    settle = "native-mnt" if s.x402_native else ("facilitator" if s.x402_facilitator_url else "local-verify")
+    print(f"[alpha] serving on :{s.alpha_port}  recall={'on-chain' if live else 'in-memory'} · settle={settle}")
     web.run_app(build_app(gateway, _alpha_exchange(s), chain, signals=_alpha_signals(s),
                           cache_ttl=s.alpha_cache_ttl_s, cache=cache), port=s.alpha_port)
 

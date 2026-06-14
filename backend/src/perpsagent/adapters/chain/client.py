@@ -70,6 +70,17 @@ def _b32(hexstr: str) -> bytes:
     return bytes.fromhex(h).rjust(32, b"\x00")[:32]
 
 
+class _NativeTransfer:
+    """Adapts a plain MNT transfer to the NonceManager's `fn.build_transaction(params)`
+    interface, so native sends reuse the same race-free nonce lane as contract calls."""
+
+    def __init__(self, to: str, value: int) -> None:
+        self._to, self._value = to, value
+
+    def build_transaction(self, params: dict) -> dict:
+        return {**params, "to": self._to, "value": self._value, "gas": 21000}
+
+
 class _DetailMirror:
     """configHash(hex) -> (GridConfig, RegimeFingerprint). Optional JSON persistence."""
 
@@ -222,6 +233,11 @@ class MantleChainClient:
         return await asyncio.to_thread(
             lambda: self.vault.functions.balanceOf(Web3.to_checksum_address(user), Web3.to_checksum_address(asset)).call()
         )
+
+    async def send_native(self, to: str, amount: int) -> str:
+        """Send `amount` wei of native MNT to `to` (e.g. a builder fee to the
+        treasury) — confirmed, since it moves money. Reuses the signer's nonce lane."""
+        return await self._send_confirmed(_NativeTransfer(Web3.to_checksum_address(to), int(amount)))
 
     # ---- tx plumbing (nonce-managed; see adapters/chain/nonce.py) ----
 

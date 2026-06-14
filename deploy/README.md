@@ -96,8 +96,15 @@ perpsagent-worker perpsbot` and check each leg:
 | **On-chain COMMIT** | the `/grid` reply shows **⛓ committed on-chain · tx …** | tx confirms on https://sepolia.mantlescan.xyz |
 | **On-chain ATTEST + LEARN** | `/stop` the grid → reply shows **⛓ outcome attested on-chain** | attest + StrategyMemory `write` txs confirm |
 | **Signals (SENSE)** | with signal keys set, launch a grid; worker log shows fused regime (vol/funding/social/smart-money) | no `signal … skipped` for configured ones |
-| **x402 alpha API** | enable `perpsagent-alpha`; `curl -i http://HOST:8402/v1/alpha/recall/BTCUSDT` | **HTTP 402** + `PaymentRequirements`; paid call → 200 with verified episodes |
-| **Builder fee** | set `PERPSAGENT_BUILDER_FEE>0` + `FEE_ASSET`, deposit a bond into the Vault, close a grid | `FeeSettled` event on the Vault |
+| **x402 alpha API** | set `X402_PAY_TO`, enable `perpsagent-alpha`; `curl -i http://HOST:8402/v1/alpha/recall/BTCUSDT` | **HTTP 402** + `PaymentRequirements` (asset MNT); pay MNT to `PAY_TO` then retry with `{txHash}` → 200 + verified episodes |
+| **Builder fee** | set `PERPSAGENT_BUILDER_FEE>0` (wei) + `X402_PAY_TO` (treasury), close a grid | native MNT transfer operator→treasury, confirmed on mantlescan |
+
+> **x402 settlement on Mantle = native MNT** (default). Mantle's gas token isn't an
+> EIP-3009 ERC-20, so the gasless "exact" scheme can't move it; instead the client
+> pays MNT and the server verifies that transfer on-chain — real on-chain pay-per-call,
+> no facilitator, no token deploy. (No hosted x402 facilitator supports Mantle Sepolia
+> yet. To use the standard EIP-3009 scheme set `X402_NATIVE=false` + an EIP-3009 token
+> + a facilitator, e.g. self-hosted x402-rs or Questflow's `facilitator.questflow.ai`.)
 
 > The verifiable loop signs every proof with the **operator** wallet (one signer,
 > race-free nonce lane); users stay non-custodial on their own Bybit keys. Without

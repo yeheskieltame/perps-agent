@@ -77,3 +77,55 @@ async def test_settle_deferred_mode():
     res = await g.settle(make_payment(g, acct), g.requirements("r"))
     assert res["success"] and res["mode"] == "deferred"
     assert res["payer"].lower() == acct.address.lower()
+
+
+# ---- native MNT scheme: pay the gas token directly, verified on-chain ----
+
+class _NativeGW(X402Gateway):
+    """Native gateway with a stubbed on-chain tx lookup (no node needed)."""
+
+    def __init__(self, **kw):
+        super().__init__(pay_to=PAY_TO, asset="MNT", native=True, rpc_url="http://stub", **kw)
+        self.onchain: dict[str, tuple] = {}  # txHash -> (to, value, status)
+
+    def _fetch_tx(self, tx_hash):
+        return self.onchain.get(tx_hash, (None, 0, 0))
+
+
+def _native_payment(tx_hash="0x" + "11" * 32):
+    return {"x402Version": 1, "scheme": "mnt-native", "network": "mantle-sepolia",
+            "payload": {"txHash": tx_hash, "from": "0x" + "99" * 20}}
+
+
+def test_native_challenge_advertises_mnt():
+    a = _NativeGW().challenge("https://api/x")["accepts"][0]
+    assert a["scheme"] == "mnt-native" and a["asset"] == "MNT"
+    assert a["extra"] == {"symbol": "MNT", "decimals": 18}
+
+
+@pytest.mark.asyncio
+async def test_native_verify_accepts_confirmed_payment_then_blocks_replay():
+    g = _NativeGW()
+    req = g.requirements("r")  # maxAmountRequired = default 10000
+    g.onchain["0x" + "11" * 32] = (PAY_TO, 50000, 1)  # to=payTo, enough, confirmed
+    ok, reason = await g.verify(_native_payment(), req)
+    assert ok and reason == "ok"
+    ok2, reason2 = await g.verify(_native_payment(), req)   # same tx again
+    assert not ok2 and "replay" in reason2
+    res = await g.settle(_native_payment(), req)
+    assert res["mode"] == "native" and res["transaction"] == "0x" + "11" * 32
+
+
+@pytest.mark.asyncio
+async def test_native_verify_rejects_bad_payments():
+    g = _NativeGW()
+    req = g.requirements("r")
+    g.onchain = {
+        "0xunconfirmed": (PAY_TO, 50000, 0),     # reverted/pending
+        "0xwrongto": ("0x" + "cc" * 20, 50000, 1),
+        "0xtoolow": (PAY_TO, 1, 1),
+    }
+    assert (await g.verify(_native_payment("0xunconfirmed"), req))[0] is False
+    assert (await g.verify(_native_payment("0xwrongto"), req))[0] is False
+    assert (await g.verify(_native_payment("0xtoolow"), req))[0] is False
+    assert (await g.verify(_native_payment("0xmissing"), req))[0] is False  # unknown tx

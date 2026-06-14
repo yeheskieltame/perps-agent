@@ -39,6 +39,7 @@ _COMMANDS = [
     BotCommand(command="start", description="🏠 Home — balance, positions, all buttons"),
     BotCommand(command="grid", description="➕ Launch a grid (wizard or args)"),
     BotCommand(command="status", description="📊 Your grids"),
+    BotCommand(command="history", description="📜 Closed-grid history"),
     BotCommand(command="wallet", description="👛 Your MNT wallet"),
     BotCommand(command="topup", description="💧 Fund your MNT wallet"),
     BotCommand(command="balance", description="💰 Venue equity"),
@@ -162,6 +163,11 @@ async def cmd_grid(message: Message, api: WorkerAPI, settings: BotSettings,
 async def cmd_status(message: Message, api: WorkerAPI) -> None:
     rows = await _safe_status(api, _uid(message))
     await message.answer(commands.render_status(rows), reply_markup=grids_kb(rows))
+
+
+@router.message(Command("history"))
+async def cmd_history(message: Message, api: WorkerAPI) -> None:
+    await message.answer(await commands.history(api, _uid(message)), reply_markup=back_kb("history"))
 
 
 @router.message(Command("stop"))
@@ -325,6 +331,12 @@ async def cb_menu(cb: CallbackQuery, api: WorkerAPI, state: FSMContext,
     elif action == "grids":
         rows = await _safe_status(api, uid)
         await _edit(cb, commands.render_status(rows), grids_kb(rows))
+    elif action == "history":
+        await _edit(cb, await commands.history(api, uid), back_kb("history"))
+    elif action == "clear":
+        note = await commands.clear_stopped(api, uid)
+        rows = await _safe_status(api, uid)
+        await _edit(cb, note + "\n\n" + commands.render_status(rows), grids_kb(rows))
     elif action == "balance":
         await _edit(cb, await commands.balance(api, uid), back_kb("balance"))
     elif action == "price":

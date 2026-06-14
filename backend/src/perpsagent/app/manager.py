@@ -73,5 +73,10 @@ class GridManager:
     def get(self, instance_id: str) -> GridEngine | None:
         return self._engines.get(instance_id)
 
+    def discard(self, instance_id: str) -> None:
+        """Forget a (stopped) engine so it leaves the active list. Its orders are
+        already cancelled by stop(); the store still holds it for history."""
+        self._engines.pop(instance_id, None)
+
     def all(self) -> list[GridEngine]:
         return list(self._engines.values())

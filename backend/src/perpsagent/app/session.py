@@ -65,6 +65,23 @@ class UserSession:
     def pause(self, instance_id: str) -> None:
         self.manager.pause(instance_id)
 
+    async def forget(self, instance_id: str) -> None:
+        """Drop one (already stopped) grid from the active list; tear the idle
+        consumer down if it was the last one."""
+        self.manager.discard(instance_id)
+        if not self.manager.all():
+            await self._cancel_router()
+
+    async def clear_stopped(self) -> int:
+        """Drop every HALTED/EXITING grid from the active list. Returns the count."""
+        gone = [e.cfg.instance_id for e in self.manager.all()
+                if e.state.value in ("HALTED", "EXITING")]
+        for iid in gone:
+            self.manager.discard(iid)
+        if gone and not self.manager.all():
+            await self._cancel_router()
+        return len(gone)
+
     async def aclose(self) -> None:
         """Stop the consumer and close the venue client (call on user disconnect)."""
         await self._cancel_router()

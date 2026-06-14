@@ -142,11 +142,11 @@ class AppService:
         session = self._owning_session(user_id, instance_id)
         engine = session.manager.get(instance_id)  # grab the ref before stop tears it down
         await session.stop(instance_id)
+        outcome = engine.outcome() if engine is not None else None
         # ATTEST the verified outcome + LEARN (write StrategyMemory). Post-trade writes
         # are fire-then-confirm in the chain client — they don't block the close path,
         # and a revert is logged, never raised (mirrors agent/loop.close_and_learn).
-        if self._chain is not None and engine is not None:
-            outcome = engine.outcome()
+        if self._chain is not None and outcome is not None:
             try:
                 self._proofs.setdefault(instance_id, {})["attest"] = await self._chain.attest(instance_id, outcome)
             except Exception as e:  # noqa: BLE001 — one failed write must not break the close
@@ -160,6 +160,15 @@ class AppService:
                     print(f"  ! write_memory failed ({instance_id}): {e}")
         # Builder fee runs regardless of the chain (the user-wallet path is independent).
         await self._settle_builder_fee(user_id, instance_id)
+        # Save the closed episode to history, then drop it from the active list so the
+        # dashboard isn't cluttered with HALTED grids (the store still holds it).
+        if outcome is not None and self._store is not None and hasattr(self._store, "record_episode"):
+            try:
+                await self._store.record_episode(user_id, instance_id, engine.cfg.market,
+                                                 str(outcome.realized_pnl), outcome.fill_count, outcome.winrate)
+            except Exception as e:  # noqa: BLE001
+                print(f"  ! record_episode failed ({instance_id}): {e}")
+        await session.forget(instance_id)
 
     async def _settle_builder_fee(self, user_id: int, instance_id: str) -> None:
         """Settle the flat builder fee on-chain. Precedence:
@@ -188,6 +197,17 @@ class AppService:
 
     async def pause_grid(self, user_id: int, instance_id: str) -> None:
         self._owning_session(user_id, instance_id).pause(instance_id)
+
+    async def clear_stopped(self, user_id: int) -> int:
+        """Drop every HALTED/EXITING grid from the user's active list (history kept)."""
+        session = self._sessions.get(user_id)
+        return await session.clear_stopped() if session is not None else 0
+
+    async def history(self, user_id: int, limit: int = 20) -> list[dict]:
+        """Recently closed episodes for this user (pnl, fills, market, time)."""
+        if self._store is not None and hasattr(self._store, "load_episodes"):
+            return await self._store.load_episodes(user_id, limit)
+        return []
 
     async def status(self, user_id: int) -> Sequence[GridStatusView]:
         session = self._sessions.get(user_id)

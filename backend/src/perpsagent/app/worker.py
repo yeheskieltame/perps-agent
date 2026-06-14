@@ -16,6 +16,8 @@ API (user identified by the `X-User-Id` header):
   DELETE /v1/grids/{instance_id}
   POST   /v1/grids/{instance_id}/pause
   GET    /v1/status               -> [{instance_id, state, realized_pnl, fill_count}]
+  POST   /v1/grids/clear           -> {cleared: N}  (drop HALTED/EXITING from the active list)
+  GET    /v1/history               -> [{instance_id, market, realized_pnl, fill_count, winrate, closed_at}]
   GET    /v1/settings             -> {settings: {band, levels, size, leverage, ...}, customized: [...]}
   PUT    /v1/settings             {key: value, ...} -> validated, persisted per user
   DELETE /v1/settings             -> reset to defaults
@@ -185,6 +187,12 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
             for s in rows
         ])
 
+    async def clear_stopped(request: web.Request) -> web.Response:
+        return web.json_response({"cleared": await service.clear_stopped(_user_id(request))})
+
+    async def history(request: web.Request) -> web.Response:
+        return web.json_response(await service.history(_user_id(request)))
+
     async def balance(request: web.Request) -> web.Response:
         try:
             b = await service.balance(_user_id(request))
@@ -251,7 +259,9 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
     app.router.add_delete("/v1/settings", delete_settings)
     app.router.add_delete("/v1/grids/{instance_id}", stop)
     app.router.add_post("/v1/grids/{instance_id}/pause", pause)
+    app.router.add_post("/v1/grids/clear", clear_stopped)
     app.router.add_get("/v1/status", status)
+    app.router.add_get("/v1/history", history)
     app.router.add_get("/v1/balance", balance)
     app.router.add_get("/v1/market/{market}", market)
     app.router.add_put("/v1/credentials", put_credentials)

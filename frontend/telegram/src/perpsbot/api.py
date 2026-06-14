@@ -63,6 +63,14 @@ class WorkerAPI:
     async def status(self, user_id: int) -> list[dict]:
         return await self._req("GET", "/v1/status", user_id)
 
+    async def clear_stopped(self, user_id: int) -> dict:
+        """Drop HALTED/EXITING grids from the active list (history kept). -> {cleared}"""
+        return await self._req("POST", "/v1/grids/clear", user_id)
+
+    async def history(self, user_id: int) -> list[dict]:
+        """Recently closed grids: [{instance_id, market, realized_pnl, fill_count, winrate, closed_at}]."""
+        return await self._req("GET", "/v1/history", user_id)
+
     async def stop(self, user_id: int, instance_id: str) -> dict:
         """Stop a grid. Returns {ok, proofs} — proofs carries the attest/memory tx
         hashes when the backend's verifiable loop is on-chain."""

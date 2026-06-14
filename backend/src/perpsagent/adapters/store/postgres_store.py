@@ -48,6 +48,12 @@ CREATE TABLE IF NOT EXISTS wallets (
     ciphertext BYTEA NOT NULL,
     updated_at BIGINT
 );
+CREATE TABLE IF NOT EXISTS episodes (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT, instance_id TEXT, market TEXT,
+    realized_pnl TEXT, fill_count INTEGER, winrate DOUBLE PRECISION, closed_at BIGINT
+);
+CREATE INDEX IF NOT EXISTS idx_episodes_user ON episodes(user_id);
 """
 
 
@@ -164,6 +170,26 @@ class PostgresStore:
     async def get_wallet(self, user_id: int) -> bytes | None:
         pool = await self._ensure()
         return await pool.fetchval("SELECT ciphertext FROM wallets WHERE user_id=$1", user_id)
+
+    # ---- closed-episode history ----
+
+    async def record_episode(self, user_id: int, instance_id: str, market: str,
+                             realized_pnl: str, fill_count: int, winrate: float) -> None:
+        pool = await self._ensure()
+        await pool.execute(
+            "INSERT INTO episodes(user_id,instance_id,market,realized_pnl,fill_count,winrate,closed_at) "
+            "VALUES($1,$2,$3,$4,$5,$6,$7)",
+            user_id, instance_id, market, str(realized_pnl), int(fill_count),
+            float(winrate), int(time.time()),
+        )
+
+    async def load_episodes(self, user_id: int, limit: int = 20) -> list[dict]:
+        pool = await self._ensure()
+        rows = await pool.fetch(
+            "SELECT instance_id,market,realized_pnl,fill_count,winrate,closed_at FROM episodes "
+            "WHERE user_id=$1 ORDER BY id DESC LIMIT $2", user_id, limit,
+        )
+        return [dict(r) for r in rows]
 
     # ---- per-user strategy settings (JSON of validated knobs — app/prefs.py) ----
 

@@ -57,7 +57,7 @@ def main_menu_kb(connected: bool) -> InlineKeyboardMarkup:
     account row flips on connection (Connect ↔ Re-connect/Disconnect)."""
     kb = InlineKeyboardBuilder()
     kb.row(_b("🚀 New Grid", "new_grid"))                       # primary, full width
-    kb.row(_b("📊 My Grids · Positions", "grids"))
+    kb.row(_b("📊 My Grids", "grids"), _b("📜 History", "history"))
     kb.row(_b("👛 Wallet", "wallet"), _b("💰 Balance", "balance"), _b("💱 Price", "price"))
     kb.row(_b("⚙️ Settings", "settings"), _b("💧 Top up", "topup"))
     if connected:
@@ -159,7 +159,11 @@ def grids_kb(rows: list[dict]) -> InlineKeyboardMarkup:
         buttons.append(InlineKeyboardButton(
             text=f"🛑 Stop {short}", callback_data=GridCB(action="stop_ask", iid=iid).pack()))
         kb.row(*buttons)
-    kb.row(InlineKeyboardButton(text="🔄 Refresh", callback_data=MenuCB(action="grids").pack()))
+    kb.row(
+        InlineKeyboardButton(text="🔄 Refresh", callback_data=MenuCB(action="grids").pack()),
+        InlineKeyboardButton(text="🧹 Clear stopped", callback_data=MenuCB(action="clear").pack()),
+    )
+    kb.row(InlineKeyboardButton(text="📜 History", callback_data=MenuCB(action="history").pack()))
     _menu_row(kb)
     return kb.as_markup()
 

@@ -44,6 +44,12 @@ CREATE TABLE IF NOT EXISTS wallets (
     ciphertext BLOB NOT NULL,
     updated_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS episodes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER, instance_id TEXT, market TEXT,
+    realized_pnl TEXT, fill_count INTEGER, winrate REAL, closed_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_episodes_user ON episodes(user_id);
 """
 _OPEN_STATES = ("INITIALIZING", "RUNNING", "REBALANCING")
 
@@ -212,6 +218,35 @@ class SqliteStore:
                 "SELECT ciphertext FROM wallets WHERE user_id=?", (user_id,)
             ).fetchone()
         return row[0] if row else None
+
+    # ---- closed-episode history ----
+
+    async def record_episode(self, user_id: int, instance_id: str, market: str,
+                             realized_pnl: str, fill_count: int, winrate: float) -> None:
+        await asyncio.to_thread(self._record_episode, user_id, instance_id, market,
+                                realized_pnl, fill_count, winrate)
+
+    def _record_episode(self, user_id, instance_id, market, realized_pnl, fill_count, winrate) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO episodes(user_id,instance_id,market,realized_pnl,fill_count,winrate,closed_at) "
+                "VALUES(?,?,?,?,?,?,?)",
+                (user_id, instance_id, market, str(realized_pnl), int(fill_count),
+                 float(winrate), int(time.time())),
+            )
+            self._conn.commit()
+
+    async def load_episodes(self, user_id: int, limit: int = 20) -> list[dict]:
+        return await asyncio.to_thread(self._load_episodes, user_id, limit)
+
+    def _load_episodes(self, user_id: int, limit: int) -> list[dict]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT instance_id,market,realized_pnl,fill_count,winrate,closed_at FROM episodes "
+                "WHERE user_id=? ORDER BY id DESC LIMIT ?", (user_id, limit),
+            ).fetchall()
+        return [{"instance_id": r[0], "market": r[1], "realized_pnl": r[2],
+                 "fill_count": r[3], "winrate": r[4], "closed_at": r[5]} for r in rows]
 
     # ---- per-user strategy settings (JSON of validated knobs — app/prefs.py) ----
 

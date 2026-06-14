@@ -217,6 +217,33 @@ async def menu_snapshot(api, user_id: int) -> str:
     return "\n".join(lines)
 
 
+def render_history(rows: list[dict]) -> str:
+    """Recently closed grids: pnl, fills, winrate per episode."""
+    if not rows:
+        return "📜 <b>History</b>\nNo closed grids yet — your stopped grids will show here."
+    lines = ["📜 <b>History</b> — recently closed grids"]
+    for r in rows:
+        wr = round(float(r.get("winrate", 0)) * 100)
+        lines.append(f"• <code>{r['instance_id']}</code> · {r.get('market', '?')}\n"
+                     f"     pnl <b>{r.get('realized_pnl', '0')}</b> · fills {r.get('fill_count', 0)} · win {wr}%")
+    return "\n".join(lines)
+
+
+async def history(api, user_id: int) -> str:
+    try:
+        return render_history(await api.history(user_id))
+    except ApiError as e:
+        return _err(e)
+
+
+async def clear_stopped(api, user_id: int) -> str:
+    try:
+        n = (await api.clear_stopped(user_id)).get("cleared", 0)
+    except ApiError as e:
+        return _err(e)
+    return f"🧹 Cleared {n} stopped grid(s)." if n else "Nothing to clear — no stopped grids."
+
+
 def render_status(rows: list[dict]) -> str:
     """Grid list for the My-Grids view (rows already fetched by the caller)."""
     if not rows:

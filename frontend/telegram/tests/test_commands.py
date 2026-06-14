@@ -56,6 +56,14 @@ class FakeAPI:
         self._maybe_fail()
         return self.rows
 
+    async def clear_stopped(self, uid):
+        self._maybe_fail()
+        return {"cleared": getattr(self, "cleared", 0)}
+
+    async def history(self, uid):
+        self._maybe_fail()
+        return getattr(self, "hist", [])
+
     async def stop(self, uid, iid):
         self.calls.append(("stop", uid, iid))
         self._maybe_fail()
@@ -337,3 +345,25 @@ async def test_create_grid_result_surfaces_validation_error():
     api.fail = ApiError(400, "band: must be in [0.05, 10]")
     text, iid = await commands.create_grid_result(api, 42, "BTCUSDT", "0.0001", 10, "0.001")
     assert iid is None and "band" in text
+
+
+def test_render_history_empty_and_rows():
+    assert "No closed grids" in commands.render_history([])
+    out = commands.render_history([{"instance_id": "i1", "market": "BTCUSDT",
+                                    "realized_pnl": "3.4", "fill_count": 42, "winrate": 1.0}])
+    assert "i1" in out and "BTCUSDT" in out and "3.4" in out and "win 100%" in out
+
+
+async def test_history_command_renders():
+    api = FakeAPI()
+    api.hist = [{"instance_id": "i1", "market": "BTCUSDT", "realized_pnl": "3.4",
+                 "fill_count": 42, "winrate": 0.5}]
+    out = await commands.history(api, 42)
+    assert "i1" in out and "win 50%" in out
+
+
+async def test_clear_stopped_note():
+    api = FakeAPI()
+    api.cleared = 2
+    assert "Cleared 2" in await commands.clear_stopped(api, 42)
+    assert "Nothing to clear" in await commands.clear_stopped(FakeAPI(), 42)

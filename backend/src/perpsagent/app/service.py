@@ -289,6 +289,20 @@ class AppService:
             })
         return out
 
+    async def open_orders(self, user_id: int) -> list[dict]:
+        """All resting venue orders across the user's grid + position markets, sorted
+        by market then price (high → low)."""
+        session = await self._session(user_id)
+        markets = {eng.cfg.market for eng in session.engines()}
+        markets |= {p.market for p in await session.exchange.positions() if p.size != 0}
+        out: list[dict] = []
+        for m in sorted(markets):
+            for o in await session.exchange.open_orders(m):
+                out.append({"market": o.market, "side": o.side.value,
+                            "price": str(o.price), "qty": str(o.qty), "level": o.level})
+        out.sort(key=lambda r: (r["market"], -float(r["price"])))
+        return out
+
     async def close_position(self, user_id: int, market: str) -> None:
         """Flatten one venue position at market (a taker close)."""
         session = await self._session(user_id)

@@ -107,6 +107,10 @@ class FakeAPI:
         self._maybe_fail()
         return getattr(self, "pos", [])
 
+    async def open_orders(self, uid):
+        self._maybe_fail()
+        return getattr(self, "ords", [])
+
     async def close_position(self, uid, market):
         self.calls.append(("close_pos", uid, market))
         self._maybe_fail()
@@ -432,6 +436,21 @@ async def test_positions_error_yields_none_rows_and_connect_hint():
     api.fail = ApiError(401, "no venue credentials")
     text, rows = await commands.positions(api, 42)
     assert rows is None and "/connect" in text
+
+
+def test_render_orders_groups_by_market_with_side_icons():
+    rows = [{"market": "BTCUSDT", "side": "buy", "price": "99", "qty": "0.001", "level": 1},
+            {"market": "BTCUSDT", "side": "sell", "price": "101", "qty": "0.001", "level": 2}]
+    out = commands.render_orders(rows)
+    assert "BTCUSDT" in out and "🟢" in out and "🔴" in out and "99" in out and "101" in out
+    assert "No open orders" in commands.render_orders([])
+
+
+async def test_orders_command_renders():
+    api = FakeAPI()
+    api.ords = [{"market": "ETHUSDT", "side": "buy", "price": "50", "qty": "1", "level": 0}]
+    out = await commands.orders(api, 42)
+    assert "ETHUSDT" in out and "🟢" in out and "BUY" in out
 
 
 async def test_close_position_note_and_call():

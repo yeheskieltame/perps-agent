@@ -46,6 +46,16 @@ async def test_zero_size_positions_are_skipped():
 
 
 @pytest.mark.asyncio
+async def test_open_orders_lists_resting_grid_orders():
+    ex = FakeExchange({"mid": "100", "tick": "0.1"})
+    svc = AppService(client_factory=lambda _u: ex)
+    await svc.create_grid(7, _cfg("BTCUSDT-0-a"))
+    rows = await svc.open_orders(7)
+    assert rows and all(r["market"] == "BTCUSDT" for r in rows)
+    assert {r["side"] for r in rows} <= {"buy", "sell"}
+
+
+@pytest.mark.asyncio
 async def test_close_all_positions_flattens_every_market():
     ex = FakeExchange({"mid": "100"})
     ex._positions["BTCUSDT"] = Position("BTCUSDT", Decimal("0.1"), Decimal("100"))

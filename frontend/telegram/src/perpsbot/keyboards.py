@@ -63,7 +63,8 @@ def main_menu_kb(connected: bool) -> InlineKeyboardMarkup:
     account row flips on connection (Connect ↔ Re-connect/Disconnect)."""
     kb = InlineKeyboardBuilder()
     kb.row(_b("🚀 New Grid", "new_grid"))                       # primary, full width
-    kb.row(_b("📊 My Grids", "grids"), _b("📋 Positions", "positions"), _b("📜 History", "history"))
+    kb.row(_b("📊 My Grids", "grids"), _b("📋 Positions", "positions"))
+    kb.row(_b("📑 Orders", "orders"), _b("📜 History", "history"))
     kb.row(_b("👛 Wallet", "wallet"), _b("💰 Balance", "balance"), _b("💱 Price", "price"))
     kb.row(_b("⚙️ Config", "settings"), _b("💧 Top up", "topup"))
     if connected:
@@ -214,6 +215,14 @@ def positions_kb(rows: list[dict]) -> InlineKeyboardMarkup:
                                     callback_data=PosCB(action="close_ask", market=mkt).pack()))
     kb.row(_b("❌ Close all", "closeall_ask"), _b("🧹 Cancel all orders", "cancelall_ask"))
     kb.row(_b("🛑 Close everything", "panic_ask"))
+    _menu_row(kb)
+    return kb.as_markup()
+
+
+def orders_kb() -> InlineKeyboardMarkup:
+    """Open-orders view: refresh + cancel-all (which also stops grids)."""
+    kb = InlineKeyboardBuilder()
+    kb.row(_b("🔄 Refresh", "orders"), _b("🧹 Cancel all", "cancelall_ask"))
     _menu_row(kb)
     return kb.as_markup()
 

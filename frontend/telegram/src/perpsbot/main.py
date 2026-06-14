@@ -26,7 +26,8 @@ from .config import BotSettings, is_allowed
 from .keyboards import (
     KNOB_HELP, KNOB_LABEL, GridCB, MenuCB, PosCB, PriceCB, SetCB, WizCB,
     back_kb, bulk_confirm_kb, config_kb, detail_kb, grids_kb, launched_kb, main_menu_kb,
-    pos_confirm_kb, positions_kb, price_kb, price_result_kb, setting_picker_kb, stop_confirm_kb,
+    orders_kb, pos_confirm_kb, positions_kb, price_kb, price_result_kb, setting_picker_kb,
+    stop_confirm_kb,
     wiz_band_kb, wiz_confirm_kb, wiz_levels_kb, wiz_margin_kb, wiz_market_kb, wiz_size_kb,
     wiz_strategy_kb,
 )
@@ -39,6 +40,7 @@ _COMMANDS = [
     BotCommand(command="grid", description="➕ Launch a grid (wizard or args)"),
     BotCommand(command="status", description="📊 Your grids"),
     BotCommand(command="positions", description="📋 Live Bybit positions"),
+    BotCommand(command="orders", description="📑 Open Bybit orders"),
     BotCommand(command="history", description="📜 Closed-grid history"),
     BotCommand(command="wallet", description="👛 Your MNT wallet"),
     BotCommand(command="topup", description="💧 Fund your MNT wallet"),
@@ -225,6 +227,11 @@ async def cmd_positions(message: Message, api: WorkerAPI) -> None:
     await message.answer(text, reply_markup=positions_kb(rows) if rows is not None else back_kb("positions"))
 
 
+@router.message(Command("orders"))
+async def cmd_orders(message: Message, api: WorkerAPI) -> None:
+    await message.answer(await commands.orders(api, _uid(message)), reply_markup=orders_kb())
+
+
 @router.message(Command("wallet"))
 async def cmd_wallet(message: Message, api: WorkerAPI) -> None:
     await message.answer(await commands.wallet(api, _uid(message)), reply_markup=back_kb("wallet"))
@@ -360,6 +367,8 @@ async def cb_menu(cb: CallbackQuery, api: WorkerAPI, state: FSMContext,
     elif action == "positions":
         text, rows = await commands.positions(api, uid)
         await _edit(cb, text, positions_kb(rows) if rows is not None else back_kb("positions"))
+    elif action == "orders":
+        await _edit(cb, await commands.orders(api, uid), orders_kb())
     elif action == "closeall_ask":
         await _edit(cb, "❌ <b>Close ALL positions</b> at market price?\nThis flattens every "
                         "open position on the venue.", bulk_confirm_kb("closeall_do"))

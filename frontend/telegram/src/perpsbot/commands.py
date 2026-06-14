@@ -23,6 +23,7 @@ HELP = (
     "/set reset — back to defaults\n"
     "/status — your grids (state, pnl, fills)\n"
     "/positions — live Bybit positions (size, entry, mark, PnL) + close\n"
+    "/orders — your open Bybit orders\n"
     "/stop INSTANCE — cancel orders, close the grid\n"
     "/pause INSTANCE — halt new orders\n"
     "/price MARKET — live top-of-book\n"
@@ -610,6 +611,28 @@ def render_positions(rows: list[dict]) -> str:
             f"Entry {r['entry']} → Mark {r['mark']}\n"
             f"PnL {picon} {pnl_disp} ({pct_disp}% vs entry)")
     return "\n".join(lines)
+
+
+def render_orders(rows: list[dict]) -> str:
+    """Open venue orders grouped by market (🟢 buys / 🔴 sells), price high → low."""
+    if not rows:
+        return "📑 <b>Open orders · Bybit</b>\nNo open orders right now."
+    lines = ["📑 <b>Open orders · Bybit</b>"]
+    cur = None
+    for r in rows:
+        if r["market"] != cur:
+            cur = r["market"]
+            lines.append(f"\n<b>{cur}</b>")
+        icon = "🟢" if str(r["side"]).lower().startswith("b") else "🔴"
+        lines.append(f"{icon} {str(r['side']).upper()} {r['qty']} @ {r['price']}")
+    return "\n".join(lines)
+
+
+async def orders(api, user_id: int) -> str:
+    try:
+        return render_orders(await api.open_orders(user_id))
+    except ApiError as e:
+        return _err(e)
 
 
 async def positions(api, user_id: int) -> tuple[str, list[dict] | None]:

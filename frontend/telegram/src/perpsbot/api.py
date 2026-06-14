@@ -105,6 +105,10 @@ class WorkerAPI:
         """Open Bybit positions: [{market, side, size, entry, mark, pnl, pnl_pct, notional}]."""
         return await self._req("GET", "/v1/positions", user_id)
 
+    async def open_orders(self, user_id: int) -> list[dict]:
+        """Resting venue orders: [{market, side, price, qty, level}]."""
+        return await self._req("GET", "/v1/orders", user_id)
+
     async def close_position(self, user_id: int, market: str) -> dict:
         return await self._req("POST", f"/v1/positions/{market}/close", user_id)
 

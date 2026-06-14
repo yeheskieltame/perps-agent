@@ -93,11 +93,14 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
     async def healthz(_request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "node": node})
 
-    async def _plan_template(user_id: int, market: str | None, template: str | None, margin) -> dict:
+    async def _plan_template(user_id: int, market: str | None, template: str | None,
+                             margin, margin_pct=None) -> dict:
         """Resolve a template + chosen margin into concrete settings + a preview of the
-        resulting size/notional/bounds (the worker has the live balance + price). The
-        user commits `margin` (quote/USDT); leverage comes from the template. With no
-        margin, the template's default fraction of free balance is used."""
+        resulting size/notional/bounds. The WORKER owns the sizing because it reads the
+        live balance + price — the UI never computes against a balance. Margin precedence:
+        explicit `margin` (USDT) > `margin_pct` (fraction of free balance) > template
+        default. Free balance = available margin, falling back to equity (Bybit testnet
+        UNIFIED often reports availableBalance as 0)."""
         if template not in prefs.STRATEGY_TEMPLATES:
             raise web.HTTPBadRequest(reason=f"unknown template: {template}")
         if not market:
@@ -111,7 +114,12 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
             raise web.HTTPConflict(reason=str(e)) from None
         tpl = prefs.STRATEGY_TEMPLATES[template]
         free = bal.available if bal.available > 0 else bal.equity
-        margin_q = Decimal(str(margin)) if margin not in (None, "") else prefs.default_margin(template, free)
+        if margin not in (None, ""):
+            margin_q = Decimal(str(margin))
+        elif margin_pct not in (None, ""):
+            margin_q = free * Decimal(str(margin_pct))
+        else:
+            margin_q = prefs.default_margin(template, free)
         size = prefs.grid_size(template, margin_q, m.mid)
         if size <= 0:
             raise web.HTTPBadRequest(reason="margin/balance too low to size this grid")
@@ -128,8 +136,8 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
 
     async def preview(request: web.Request) -> web.Response:
         body = await request.json()
-        plan = await _plan_template(_user_id(request), body.get("market"),
-                                    body.get("template"), body.get("margin"))
+        plan = await _plan_template(_user_id(request), body.get("market"), body.get("template"),
+                                    body.get("margin"), body.get("margin_pct"))
         return web.json_response(plan)
 
     async def create(request: web.Request) -> web.Response:
@@ -138,7 +146,8 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
         # One-tap strategy template: resolve it (with the chosen margin) to concrete
         # balance-sized settings here, then fall through to the normal launch path.
         if body.get("template"):
-            plan = await _plan_template(user_id, body.get("market"), body["template"], body.get("margin"))
+            plan = await _plan_template(user_id, body.get("market"), body["template"],
+                                        body.get("margin"), body.get("margin_pct"))
             body["settings"] = {**(body.get("settings") or {}), **plan["settings"]}
         # Merge the user's tunables: defaults < saved settings < body["settings"].
         try:

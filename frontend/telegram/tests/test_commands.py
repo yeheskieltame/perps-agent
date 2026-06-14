@@ -24,7 +24,7 @@ class FakeAPI:
         if self.fail:
             raise self.fail
 
-    async def create_grid(self, uid, market, settings=None, template=None, margin=None):
+    async def create_grid(self, uid, market, settings=None, template=None, margin=None, margin_pct=None):
         self.calls.append(("create", uid, market, settings, template))
         self._maybe_fail()
         # the real backend normalizes aliases before merging (app/prefs.py)
@@ -76,7 +76,7 @@ class FakeAPI:
         self._maybe_fail()
         return {"ok": True, "name": name}
 
-    async def preview_grid(self, uid, market, template, margin=None):
+    async def preview_grid(self, uid, market, template, margin=None, margin_pct=None):
         self._maybe_fail()
         return {"market": market, "margin": str(margin or "0"), "leverage": "5",
                 "notional": "5000", "levels": 10, "size": "0.5", "lower": "99",
@@ -292,8 +292,8 @@ async def test_401_points_to_connect():
 class ProofAPI(FakeAPI):
     """Backend with the verifiable loop on-chain — returns commit/attest tx hashes."""
 
-    async def create_grid(self, uid, market, settings=None, template=None, margin=None):
-        resp = await super().create_grid(uid, market, settings, template, margin)
+    async def create_grid(self, uid, market, settings=None, template=None, margin=None, margin_pct=None):
+        resp = await super().create_grid(uid, market, settings, template, margin, margin_pct)
         resp["proofs"] = {"commit": "0x" + "ab" * 32}
         return resp
 
@@ -388,16 +388,6 @@ async def test_create_grid_result_surfaces_validation_error():
     api.fail = ApiError(400, "band: must be in [0.05, 10]")
     text, iid = await commands.create_grid_result(api, 42, "BTCUSDT", "0.0001", 10, "0.001")
     assert iid is None and "band" in text
-
-
-def test_pick_free_balance_falls_back_to_equity_when_available_is_zero():
-    # Bybit testnet UNIFIED often reports availableBalance as 0/empty with healthy equity
-    assert commands.pick_free_balance({"available": "0", "equity": "74282"}) == "74282"
-    assert commands.pick_free_balance({"available": "0.00", "equity": "74282"}) == "74282"
-    assert commands.pick_free_balance({"available": "", "equity": "74282"}) == "74282"
-    assert commands.pick_free_balance({"available": "junk", "equity": "74282"}) == "74282"
-    assert commands.pick_free_balance({"equity": "74282"}) == "74282"
-    assert commands.pick_free_balance({"available": "500", "equity": "74282"}) == "500"  # real free margin wins
 
 
 def test_render_template_preview_shows_computed_margin_and_size():

@@ -671,32 +671,29 @@ async def wiz_market_text(message: Message, state: FSMContext, bot: Bot, setting
 
 # Step 2 — strategy: a one-tap preset, or "Set it myself" → manual range/steps/size
 @router.callback_query(GridWizard.strategy, WizCB.filter(F.field == "preset"))
-async def wiz_strategy_pick(cb: CallbackQuery, api: WorkerAPI, state: FSMContext, bot: Bot,
+async def wiz_strategy_pick(cb: CallbackQuery, state: FSMContext, bot: Bot,
                             callback_data: WizCB) -> None:
     await cb.answer()
     if callback_data.value == "custom":
         await _go_band(bot, state)
         return
-    # Template path: capture the free balance (for the % presets) then ask for margin.
-    try:
-        free = commands.pick_free_balance(await api.balance(_uid(cb)))
-    except Exception:  # noqa: BLE001 — no creds / transport: can't size without a balance
-        await _edit_wiz(bot, state, "🔑 Connect your Bybit keys first (/connect), then try again.",
-                        wiz_strategy_kb())
-        return
     cfg = await _cfg(state)
-    cfg["template"], cfg["free"] = callback_data.value, str(free)
+    cfg["template"] = callback_data.value
     await state.update_data(cfg=cfg)
     await state.set_state(GridWizard.margin)
     await _send_step(bot, state, commands.WIZ_MARGIN, wiz_margin_kb())
 
 
-async def _preview_confirm(bot: Bot, api: WorkerAPI, state: FSMContext, user_id: int, margin) -> None:
+async def _preview_confirm(bot: Bot, api: WorkerAPI, state: FSMContext, user_id: int,
+                           margin=None, margin_pct=None) -> None:
+    """Ask the WORKER to size (it reads the real balance) and show the value to confirm."""
     cfg = await _cfg(state)
-    cfg["margin"] = str(margin)
+    cfg["margin"] = str(margin) if margin is not None else None
+    cfg["margin_pct"] = str(margin_pct) if margin_pct is not None else None
     await state.update_data(cfg=cfg)
     try:
-        plan = await api.preview_grid(user_id, cfg["market"], cfg["template"], str(margin))
+        plan = await api.preview_grid(user_id, cfg["market"], cfg["template"],
+                                      margin=cfg["margin"], margin_pct=cfg["margin_pct"])
     except Exception as e:  # noqa: BLE001
         await _edit_wiz(bot, state, f"⚠️ {e}\n\n{commands.WIZ_MARGIN}", wiz_margin_kb())
         return
@@ -712,10 +709,8 @@ async def wiz_margin_pick(cb: CallbackQuery, api: WorkerAPI, state: FSMContext, 
         await _edit_wiz(bot, state, "Type the margin to commit, in USDT (e.g. <code>100</code>):",
                         wiz_margin_kb())
         return
-    from decimal import Decimal
-    cfg = await _cfg(state)
-    margin = (Decimal(cfg.get("free", "0")) * Decimal(callback_data.value)).quantize(Decimal("0.01"))
-    await _preview_confirm(bot, api, state, _uid(cb), margin)
+    # Preset = a fraction; the worker turns it into USDT from the real free balance.
+    await _preview_confirm(bot, api, state, _uid(cb), margin_pct=callback_data.value)
 
 
 @router.message(GridWizard.margin)
@@ -730,7 +725,7 @@ async def wiz_margin_text(message: Message, api: WorkerAPI, state: FSMContext, b
         await _edit_wiz(bot, state, f"⚠️ Enter a positive USDT amount.\n\n{commands.WIZ_MARGIN}",
                         wiz_margin_kb())
         return
-    await _preview_confirm(bot, api, state, _uid(message), margin)
+    await _preview_confirm(bot, api, state, _uid(message), margin=margin)
 
 
 @router.callback_query(GridWizard.band, WizCB.filter(F.field == "band"))
@@ -808,7 +803,7 @@ async def wiz_confirm(cb: CallbackQuery, api: WorkerAPI, state: FSMContext, bot:
     await cb.answer("Launching…")
     if cfg.get("template"):
         text, iid = await commands.create_template_result(
-            api, _uid(cb), cfg["market"], cfg["template"], cfg.get("margin"))
+            api, _uid(cb), cfg["market"], cfg["template"], cfg.get("margin"), cfg.get("margin_pct"))
     else:
         text, iid = await commands.create_grid_result(
             api, _uid(cb), cfg["market"], cfg["band"], cfg["levels"], cfg["size"])

@@ -3,7 +3,7 @@ reply string (HTML). No aiogram imports, so every path is unit-testable offline.
 """
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
 from .api import ApiError
 
@@ -321,20 +321,6 @@ STRATEGY_BLURB = {
 }
 
 
-def pick_free_balance(bal: dict) -> str:
-    """Balance to size the margin % from: available margin if it's positive, else
-    equity. (Bybit testnet UNIFIED frequently reports availableBalance as 0/empty
-    even with a healthy equity — a bare `available or equity` breaks because the
-    string '0' is truthy.)"""
-    avail = bal.get("available") or "0"
-    try:
-        if Decimal(str(avail)) > 0:
-            return str(avail)
-    except (InvalidOperation, ValueError):
-        pass
-    return str(bal.get("equity") or "0")
-
-
 WIZ_MARGIN = ("💰 <b>How much to commit?</b> This is the MARGIN (your own balance) — "
               "leverage is applied on top.\nPick a % of your free balance, or ✏️ type an "
               "amount in USDT:")
@@ -360,10 +346,12 @@ def render_template_preview(plan: dict, template: str) -> str:
 
 
 async def create_template_result(api, user_id: int, market: str, template: str,
-                                 margin: str | None = None) -> tuple[str, str | None]:
-    """Launch a template grid sized from the chosen margin. -> (reply, iid|None)."""
+                                 margin: str | None = None,
+                                 margin_pct: str | None = None) -> tuple[str, str | None]:
+    """Launch a template grid; the worker sizes from margin (USDT) or margin_pct."""
     try:
-        resp = await api.create_grid(user_id, market.upper(), template=template, margin=margin)
+        resp = await api.create_grid(user_id, market.upper(), template=template,
+                                     margin=margin, margin_pct=margin_pct)
     except ApiError as e:
         if e.status == 401:
             return ("🔑 Connect your Bybit keys first with /connect.", None)

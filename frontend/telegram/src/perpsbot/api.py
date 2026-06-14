@@ -40,15 +40,16 @@ class WorkerAPI:
     async def market(self, user_id: int, market: str) -> dict:
         return await self._req("GET", f"/v1/market/{market}", user_id)
 
-    async def create_grid(self, user_id: int, market: str,
-                          settings: dict | None = None) -> dict:
-        """Launch a grid. `settings` are per-launch knob overrides (band in %,
-        levels, size, leverage, tp, ... — validated backend-side); everything not
-        given comes from the user's saved settings, then defaults. Returns the
-        full response: {instance_id, effective, lower, upper}."""
+    async def create_grid(self, user_id: int, market: str, settings: dict | None = None,
+                          template: str | None = None) -> dict:
+        """Launch a grid. `settings` are per-launch knob overrides (band in %, levels,
+        size, leverage, ...); `template` (safe/balanced/aggressive) auto-sizes from the
+        user's balance backend-side. Returns {instance_id, effective, lower, upper}."""
         body: dict = {"market": market}
         if settings:
             body["settings"] = settings
+        if template:
+            body["template"] = template
         return await self._req("POST", "/v1/grids", user_id, body)
 
     async def get_settings(self, user_id: int) -> dict:

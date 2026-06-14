@@ -24,8 +24,8 @@ class FakeAPI:
         if self.fail:
             raise self.fail
 
-    async def create_grid(self, uid, market, settings=None):
-        self.calls.append(("create", uid, market, settings))
+    async def create_grid(self, uid, market, settings=None, template=None):
+        self.calls.append(("create", uid, market, settings, template))
         self._maybe_fail()
         # the real backend normalizes aliases before merging (app/prefs.py)
         aliases = {"lev": "leverage", "tf": "timeframe"}
@@ -118,7 +118,7 @@ class FakeAPI:
 async def test_grid_no_args_uses_saved_settings():
     api = FakeAPI()
     out = await commands.grid(api, 42, "btcusdt")
-    assert api.calls == [("create", 42, "BTCUSDT", None)]   # backend merges saved
+    assert api.calls == [("create", 42, "BTCUSDT", None, None)]   # backend merges saved
     assert "Grid launched" in out and "BTCUSDT-0-abc123" in out
     assert "[99.0, 101.0]" in out and "10 levels" in out and "lev 1x" in out
 
@@ -127,7 +127,7 @@ async def test_grid_positional_args_still_work():
     api = FakeAPI()
     out = await commands.grid(api, 42, "ETHUSDT 0.8 12 0.002")
     assert api.calls == [("create", 42, "ETHUSDT",
-                          {"band": "0.8", "levels": "12", "size": "0.002"})]
+                          {"band": "0.8", "levels": "12", "size": "0.002"}, None)]
     assert "12 levels" in out and "0.002/level" in out
 
 
@@ -135,7 +135,7 @@ async def test_grid_key_value_overrides():
     api = FakeAPI()
     out = await commands.grid(api, 42, "MNTUSDT band=1.5 lev=25 tp=0.5")
     assert api.calls == [("create", 42, "MNTUSDT",
-                          {"band": "1.5", "lev": "25", "tp": "0.5"})]
+                          {"band": "1.5", "lev": "25", "tp": "0.5"}, None)]
     assert "lev 25x" in out and "tp 0.5" in out
 
 
@@ -261,8 +261,8 @@ async def test_401_points_to_connect():
 class ProofAPI(FakeAPI):
     """Backend with the verifiable loop on-chain — returns commit/attest tx hashes."""
 
-    async def create_grid(self, uid, market, settings=None):
-        resp = await super().create_grid(uid, market, settings)
+    async def create_grid(self, uid, market, settings=None, template=None):
+        resp = await super().create_grid(uid, market, settings, template)
         resp["proofs"] = {"commit": "0x" + "ab" * 32}
         return resp
 
@@ -357,6 +357,27 @@ async def test_create_grid_result_surfaces_validation_error():
     api.fail = ApiError(400, "band: must be in [0.05, 10]")
     text, iid = await commands.create_grid_result(api, 42, "BTCUSDT", "0.0001", 10, "0.001")
     assert iid is None and "band" in text
+
+
+def test_template_confirm_text_describes_the_style():
+    out = commands.template_confirm_text("BTCUSDT", "aggressive")
+    assert "BTCUSDT" in out and "Aggressive" in out and "x25" in out and "auto-set" in out
+
+
+async def test_create_template_result_forwards_template_and_shows_commit():
+    api = ProofAPI()
+    text, iid = await commands.create_template_result(api, 42, "btcusdt", "safe")
+    assert iid == "BTCUSDT-0-abc123"
+    assert "Grid launched" in text and "Safe" in text and "committed on-chain" in text
+    create = [c for c in api.calls if c[0] == "create"][-1]
+    assert create[4] == "safe"                       # template forwarded to the backend
+
+
+async def test_create_template_result_points_unconnected_users_to_connect():
+    api = FakeAPI()
+    api.fail = ApiError(401, "no venue credentials")
+    text, iid = await commands.create_template_result(api, 42, "BTCUSDT", "safe")
+    assert iid is None and "/connect" in text
 
 
 def test_render_history_empty_and_rows():

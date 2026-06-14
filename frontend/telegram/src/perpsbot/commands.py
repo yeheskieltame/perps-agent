@@ -310,6 +310,38 @@ WIZ_SIZE = ("🎚 <b>Size per step</b> — how much of the coin each order uses 
 
 _STRATEGY_LABEL = {"safe": "🛡 Safe", "balanced": "⚖️ Balanced", "aggressive": "🔥 Aggressive"}
 
+# Plain blurb per template (kept in sync with the backend STRATEGY_TEMPLATES). Size is
+# auto-set from the user's balance, so we describe leverage + how much balance it uses.
+STRATEGY_BLURB = {
+    "safe": "Leverage <b>x1</b> · ~15% of your balance · tight <b>±0.5%</b> range · 10 steps",
+    "balanced": "Leverage <b>x5</b> · ~35% of your balance · <b>±1%</b> range · 10 steps",
+    "aggressive": "Leverage <b>x25</b> · ~80% of your balance · wide <b>±2%</b> range · 8 steps",
+}
+
+
+def template_confirm_text(market: str, template: str) -> str:
+    return (f"➕ <b>Review</b> · {_STRATEGY_LABEL.get(template, template)}\n"
+            f"Coin: <b>{market}</b>\n{STRATEGY_BLURB.get(template, '')}\n"
+            f"💡 <b>Order size is auto-set from your balance.</b>\n\n"
+            f"Tap ✅ Launch — records the setup on-chain, then starts.")
+
+
+async def create_template_result(api, user_id: int, market: str,
+                                 template: str) -> tuple[str, str | None]:
+    """Launch a one-tap template (backend auto-sizes from balance). -> (reply, iid|None)."""
+    try:
+        resp = await api.create_grid(user_id, market.upper(), template=template)
+    except ApiError as e:
+        if e.status == 401:
+            return ("🔑 Connect your Bybit keys first with /connect.", None)
+        return (f"❌ {e.detail or 'launch failed'}", None)
+    iid, eff = resp["instance_id"], resp.get("effective", {})
+    text = (f"✅ <b>Grid launched</b> · {_STRATEGY_LABEL.get(template, '')}\n<code>{iid}</code>\n"
+            f"{market.upper()} [{resp.get('lower', '?')}, {resp.get('upper', '?')}] · "
+            f"{eff.get('levels', '?')} levels · size {eff.get('size', '?')} · lev x{eff.get('leverage', '?')}"
+            + _proof_line(resp.get("proofs"), "commit", "⛓ committed on-chain"))
+    return text, iid
+
 
 def grid_confirm_text(market: str, band: str, levels: int, size: str,
                       style: str | None = None) -> str:

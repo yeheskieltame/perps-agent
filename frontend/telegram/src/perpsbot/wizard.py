@@ -19,14 +19,9 @@ class GridWizard(StatesGroup):
     size = State()
     confirm = State()
 
-
-# One-tap strategies so a general user never has to understand "band/levels/size".
-# band is the half-band FRACTION ('0.01' = ±1%); size is base qty per order.
-PRESETS: dict[str, dict] = {
-    "safe":       {"band": "0.005", "levels": 10, "size": "0.001"},
-    "balanced":   {"band": "0.01",  "levels": 10, "size": "0.001"},
-    "aggressive": {"band": "0.02",  "levels": 8,  "size": "0.005"},
-}
+# Named strategies (safe/balanced/aggressive) live BACKEND-side now (app/prefs.py
+# STRATEGY_TEMPLATES) because they auto-size from the user's balance; the wizard just
+# passes the chosen template name. The manual path below still uses these parsers.
 
 
 def parse_market(text: str) -> str:

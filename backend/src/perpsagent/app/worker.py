@@ -96,6 +96,27 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
     async def create(request: web.Request) -> web.Response:
         user_id = _user_id(request)
         body = await request.json()
+        # One-tap strategy template: resolve it to balance-sized settings here (the
+        # worker has the user's live balance + price; the UI never needs an SDK).
+        template = body.get("template")
+        if template:
+            if template not in prefs.STRATEGY_TEMPLATES:
+                raise web.HTTPBadRequest(reason=f"unknown template: {template}")
+            market = body.get("market")
+            if not market:
+                raise web.HTTPBadRequest(reason="market required")
+            try:
+                bal = await service.balance(user_id)
+                m = await service.market_info(user_id, market)
+            except KeyError:
+                raise web.HTTPUnauthorized(reason=_NO_CREDS) from None
+            except PermissionError as e:
+                raise web.HTTPConflict(reason=str(e)) from None
+            free = bal.available if bal.available > 0 else bal.equity
+            size = prefs.autosize(template, free, m.mid)
+            if size <= 0:
+                raise web.HTTPBadRequest(reason="balance too low to auto-size this template")
+            body["settings"] = {**(body.get("settings") or {}), **prefs.template_settings(template, size)}
         # Merge the user's tunables: defaults < saved settings < body["settings"].
         try:
             overrides = prefs.validate_updates(body.get("settings") or {})

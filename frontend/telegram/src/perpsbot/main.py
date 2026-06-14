@@ -29,9 +29,7 @@ from .keyboards import (
     price_result_kb, setting_picker_kb, stop_confirm_kb, wiz_band_kb, wiz_confirm_kb,
     wiz_levels_kb, wiz_market_kb, wiz_size_kb, wiz_strategy_kb,
 )
-from .wizard import (
-    PRESETS, GridWizard, parse_band_pct, parse_levels, parse_market, parse_size,
-)
+from .wizard import GridWizard, parse_band_pct, parse_levels, parse_market, parse_size
 
 router = Router()
 
@@ -627,14 +625,13 @@ async def wiz_strategy_pick(cb: CallbackQuery, state: FSMContext, bot: Bot,
     if callback_data.value == "custom":
         await _go_band(bot, state)
         return
-    preset = PRESETS[callback_data.value]
     cfg = await _cfg(state)
-    cfg.update(band=preset["band"], levels=preset["levels"], size=preset["size"])
+    cfg["template"] = callback_data.value      # backend auto-sizes from balance at launch
     await state.update_data(cfg=cfg)
     await state.set_state(GridWizard.confirm)
-    await _send_step(bot, state, commands.grid_confirm_text(
-        cfg["market"], cfg["band"], cfg["levels"], cfg["size"], style=callback_data.value),
-        wiz_confirm_kb())
+    await _send_step(bot, state,
+                     commands.template_confirm_text(cfg["market"], callback_data.value),
+                     wiz_confirm_kb())
 
 
 @router.callback_query(GridWizard.band, WizCB.filter(F.field == "band"))
@@ -710,8 +707,11 @@ async def wiz_cancel(cb: CallbackQuery, api: WorkerAPI, state: FSMContext, bot: 
 async def wiz_confirm(cb: CallbackQuery, api: WorkerAPI, state: FSMContext, bot: Bot) -> None:
     cfg = await _cfg(state)
     await cb.answer("Launching…")
-    text, iid = await commands.create_grid_result(
-        api, _uid(cb), cfg["market"], cfg["band"], cfg["levels"], cfg["size"])
+    if cfg.get("template"):
+        text, iid = await commands.create_template_result(api, _uid(cb), cfg["market"], cfg["template"])
+    else:
+        text, iid = await commands.create_grid_result(
+            api, _uid(cb), cfg["market"], cfg["band"], cfg["levels"], cfg["size"])
     await _send_step(bot, state, text, launched_kb(iid) if iid else back_kb())
     await state.clear()
 

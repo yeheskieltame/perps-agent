@@ -71,7 +71,7 @@ async def test_launch_stop_price_cycle_helpers():
     api = FakeAPI()
     note = await commands.launch_note(api, 42, "mntusdt")
     assert "Launched" in note and "MNTUSDT-0-abc123" in note
-    assert ("create", 42, "MNTUSDT", None) in api.calls
+    assert ("create", 42, "MNTUSDT", None, None) in api.calls
 
     assert "Stopped" in await commands.stop_note(api, 42, "MNTUSDT-0-abc123")
     assert "mid 100.0" in await commands.price_toast(api, 42, "btcusdt")

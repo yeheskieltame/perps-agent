@@ -13,7 +13,7 @@ bot can show verbatim.
 """
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 
 from ..agent.sense import tf_minutes
 from .safety import AccountGuard, CircuitBreaker, ProfitGuard
@@ -114,6 +114,36 @@ KNOBS: dict[str, tuple[str, object]] = {
     "timeframe": ("1m", _v_timeframe),
     "recenter": ("auto", _v_recenter),       # supervisor cadence; auto = bar/4
 }
+
+
+# ---- one-tap strategy templates (auto-sized to the user's balance) ----
+# margin = fraction of FREE balance to commit as margin; notional = margin × leverage;
+# size per level = notional / (levels × price). band is the knob percent (1 = ±1%).
+# Starting defaults — meant to be tuned by a testnet soak (see deploy/README.md).
+STRATEGY_TEMPLATES: dict[str, dict] = {
+    "safe":       {"band": "0.5", "levels": 10, "leverage": "1",  "margin": "0.15"},
+    "balanced":   {"band": "1",   "levels": 10, "leverage": "5",  "margin": "0.35"},
+    "aggressive": {"band": "2",   "levels": 8,  "leverage": "25", "margin": "0.80"},
+}
+
+
+def autosize(template: str, free_balance, mid) -> Decimal:
+    """Base qty per level so the grid commits ~`margin` of free balance at `leverage`.
+    Floors to 6dp (never over-sizes); 0 when balance/price make it non-positive."""
+    tpl = STRATEGY_TEMPLATES[template]
+    free, price = Decimal(str(free_balance)), Decimal(str(mid))
+    if free <= 0 or price <= 0:
+        return Decimal(0)
+    notional = free * Decimal(tpl["margin"]) * Decimal(tpl["leverage"])
+    size = notional / (Decimal(tpl["levels"]) * price)
+    return size.quantize(Decimal("0.000001"), rounding=ROUND_DOWN)
+
+
+def template_settings(template: str, size: Decimal) -> dict[str, str]:
+    """The validated knob overrides a template produces for create_grid."""
+    tpl = STRATEGY_TEMPLATES[template]
+    return {"band": tpl["band"], "levels": str(tpl["levels"]),
+            "leverage": tpl["leverage"], "size": str(size)}
 
 
 def normalize_key(key: str) -> str:

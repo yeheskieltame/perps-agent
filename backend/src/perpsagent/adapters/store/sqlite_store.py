@@ -50,6 +50,9 @@ CREATE TABLE IF NOT EXISTS episodes (
     realized_pnl TEXT, fill_count INTEGER, winrate REAL, closed_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_episodes_user ON episodes(user_id);
+CREATE TABLE IF NOT EXISTS grid_names (
+    instance_id TEXT PRIMARY KEY, user_id INTEGER, name TEXT, updated_at INTEGER
+);
 """
 _OPEN_STATES = ("INITIALIZING", "RUNNING", "REBALANCING")
 
@@ -247,6 +250,30 @@ class SqliteStore:
             ).fetchall()
         return [{"instance_id": r[0], "market": r[1], "realized_pnl": r[2],
                  "fill_count": r[3], "winrate": r[4], "closed_at": r[5]} for r in rows]
+
+    # ---- user-assigned grid names ----
+
+    async def set_grid_name(self, user_id: int, instance_id: str, name: str) -> None:
+        await asyncio.to_thread(self._set_grid_name, user_id, instance_id, name)
+
+    def _set_grid_name(self, user_id: int, instance_id: str, name: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO grid_names(instance_id,user_id,name,updated_at) VALUES(?,?,?,?) "
+                "ON CONFLICT(instance_id) DO UPDATE SET name=excluded.name, updated_at=excluded.updated_at",
+                (instance_id, user_id, name, int(time.time())),
+            )
+            self._conn.commit()
+
+    async def load_grid_names(self, user_id: int) -> dict[str, str]:
+        return await asyncio.to_thread(self._load_grid_names, user_id)
+
+    def _load_grid_names(self, user_id: int) -> dict[str, str]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT instance_id,name FROM grid_names WHERE user_id=?", (user_id,)
+            ).fetchall()
+        return {r[0]: r[1] for r in rows}
 
     # ---- per-user strategy settings (JSON of validated knobs — app/prefs.py) ----
 

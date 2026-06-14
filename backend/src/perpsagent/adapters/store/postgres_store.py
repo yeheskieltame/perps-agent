@@ -54,6 +54,9 @@ CREATE TABLE IF NOT EXISTS episodes (
     realized_pnl TEXT, fill_count INTEGER, winrate DOUBLE PRECISION, closed_at BIGINT
 );
 CREATE INDEX IF NOT EXISTS idx_episodes_user ON episodes(user_id);
+CREATE TABLE IF NOT EXISTS grid_names (
+    instance_id TEXT PRIMARY KEY, user_id BIGINT, name TEXT, updated_at BIGINT
+);
 """
 
 
@@ -190,6 +193,21 @@ class PostgresStore:
             "WHERE user_id=$1 ORDER BY id DESC LIMIT $2", user_id, limit,
         )
         return [dict(r) for r in rows]
+
+    # ---- user-assigned grid names ----
+
+    async def set_grid_name(self, user_id: int, instance_id: str, name: str) -> None:
+        pool = await self._ensure()
+        await pool.execute(
+            "INSERT INTO grid_names(instance_id,user_id,name,updated_at) VALUES($1,$2,$3,$4) "
+            "ON CONFLICT(instance_id) DO UPDATE SET name=EXCLUDED.name, updated_at=EXCLUDED.updated_at",
+            instance_id, user_id, name, int(time.time()),
+        )
+
+    async def load_grid_names(self, user_id: int) -> dict[str, str]:
+        pool = await self._ensure()
+        rows = await pool.fetch("SELECT instance_id,name FROM grid_names WHERE user_id=$1", user_id)
+        return {r["instance_id"]: r["name"] for r in rows}
 
     # ---- per-user strategy settings (JSON of validated knobs — app/prefs.py) ----
 

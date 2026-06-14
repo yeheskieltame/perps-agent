@@ -27,6 +27,7 @@ class GridStatusView:
     state: str
     realized_pnl: str
     fill_count: int
+    name: str = ""
 
 
 @dataclass
@@ -204,24 +205,60 @@ class AppService:
         return await session.clear_stopped() if session is not None else 0
 
     async def history(self, user_id: int, limit: int = 20) -> list[dict]:
-        """Recently closed episodes for this user (pnl, fills, market, time)."""
-        if self._store is not None and hasattr(self._store, "load_episodes"):
-            return await self._store.load_episodes(user_id, limit)
-        return []
+        """Recently closed episodes for this user (pnl, fills, market, time, name)."""
+        if self._store is None or not hasattr(self._store, "load_episodes"):
+            return []
+        rows = await self._store.load_episodes(user_id, limit)
+        names = await self._grid_names(user_id)
+        for r in rows:
+            r["name"] = names.get(r["instance_id"], "")
+        return rows
 
     async def status(self, user_id: int) -> Sequence[GridStatusView]:
         session = self._sessions.get(user_id)
         if session is None:
             return []
+        names = await self._grid_names(user_id)
         return [
             GridStatusView(
                 instance_id=eng.cfg.instance_id,
                 state=eng.state.value,
                 realized_pnl=str(eng.realized),
                 fill_count=eng.fill_count,
+                name=names.get(eng.cfg.instance_id, ""),
             )
             for eng in session.engines()
         ]
+
+    async def _grid_names(self, user_id: int) -> dict:
+        if self._store is not None and hasattr(self._store, "load_grid_names"):
+            return await self._store.load_grid_names(user_id)
+        return {}
+
+    async def name_grid(self, user_id: int, instance_id: str, name: str) -> None:
+        """Set a user-friendly name for one of the user's active grids."""
+        session = self._sessions.get(user_id)
+        if session is None or not session.has(instance_id):
+            raise PermissionError("not your grid instance")
+        if self._store is not None and hasattr(self._store, "set_grid_name"):
+            await self._store.set_grid_name(user_id, instance_id, name)
+
+    async def grid_detail(self, user_id: int, instance_id: str) -> dict | None:
+        """Full view of one active grid: config + live state + name + on-chain proofs."""
+        session = self._sessions.get(user_id)
+        eng = session.manager.get(instance_id) if session is not None else None
+        if eng is None:
+            return None
+        cfg = eng.cfg
+        names = await self._grid_names(user_id)
+        return {
+            "instance_id": instance_id, "name": names.get(instance_id, ""),
+            "market": cfg.market, "state": eng.state.value,
+            "realized_pnl": str(eng.realized), "fill_count": eng.fill_count,
+            "lower": str(cfg.lower), "upper": str(cfg.upper), "levels": cfg.levels,
+            "order_size": str(cfg.order_size), "leverage": str(cfg.leverage),
+            "bias": cfg.bias, "proofs": dict(self._proofs.get(instance_id, {})),
+        }
 
     async def balance(self, user_id: int) -> BalanceView:
         session = await self._session(user_id)

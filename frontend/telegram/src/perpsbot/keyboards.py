@@ -147,24 +147,38 @@ def _short(iid: str) -> str:
     return iid.rsplit("-", 1)[-1]
 
 
+_STATE_ICON = {"RUNNING": "🟢", "REBALANCING": "🔄", "HALTED": "🔴",
+               "EXITING": "🟠", "INITIALIZING": "⏳"}
+
+
 def grids_kb(rows: list[dict]) -> InlineKeyboardMarkup:
-    """One row per grid: ⏸ Pause (hidden once winding down) + 🛑 Stop, then Refresh."""
+    """One tappable button per grid (→ detail/edit), then Refresh/Clear/History."""
     kb = InlineKeyboardBuilder()
     for r in rows:
         iid = r["instance_id"]
-        short = _short(iid)
-        buttons = []
-        if r.get("state") not in ("HALTED", "EXITING"):
-            buttons.append(InlineKeyboardButton(
-                text=f"⏸ Pause {short}", callback_data=GridCB(action="pause", iid=iid).pack()))
-        buttons.append(InlineKeyboardButton(
-            text=f"🛑 Stop {short}", callback_data=GridCB(action="stop_ask", iid=iid).pack()))
-        kb.row(*buttons)
+        icon = _STATE_ICON.get(r.get("state"), "•")
+        label = r.get("name") or _short(iid)
+        kb.row(InlineKeyboardButton(text=f"{icon} {label}",
+                                    callback_data=GridCB(action="detail", iid=iid).pack()))
     kb.row(
         InlineKeyboardButton(text="🔄 Refresh", callback_data=MenuCB(action="grids").pack()),
         InlineKeyboardButton(text="🧹 Clear stopped", callback_data=MenuCB(action="clear").pack()),
     )
     kb.row(InlineKeyboardButton(text="📜 History", callback_data=MenuCB(action="history").pack()))
+    _menu_row(kb)
+    return kb.as_markup()
+
+
+def detail_kb(iid: str, running: bool) -> InlineKeyboardMarkup:
+    """Per-grid actions: rename, edit (stop+relaunch), pause (if running), stop."""
+    kb = InlineKeyboardBuilder()
+    kb.button(text="✏️ Rename", callback_data=GridCB(action="rename", iid=iid))
+    kb.button(text="🛠 Edit", callback_data=GridCB(action="edit", iid=iid))
+    if running:
+        kb.button(text="⏸ Pause", callback_data=GridCB(action="pause", iid=iid))
+    kb.button(text="🛑 Stop", callback_data=GridCB(action="stop_ask", iid=iid))
+    kb.adjust(2)
+    kb.row(InlineKeyboardButton(text="⬅️ Grids", callback_data=MenuCB(action="grids").pack()))
     _menu_row(kb)
     return kb.as_markup()
 

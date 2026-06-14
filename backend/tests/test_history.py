@@ -56,3 +56,29 @@ async def test_history_empty_without_store():
     svc = AppService(client_factory=lambda _u: FakeExchange({"mid": "100", "tick": "0.1"}))
     assert await svc.history(7) == []
     assert await svc.clear_stopped(7) == 0                 # no session yet
+
+
+@pytest.mark.asyncio
+async def test_grid_name_flows_into_status_detail_and_history(tmp_path):
+    store = SqliteStore(str(tmp_path / "n.db"))
+    svc = _svc(store)
+    iid = await svc.create_grid(7, _cfg("BTCUSDT-0-a"))
+
+    await svc.name_grid(7, iid, "My BTC scalp")
+    assert (await svc.status(7))[0].name == "My BTC scalp"
+
+    d = await svc.grid_detail(7, iid)
+    assert d["name"] == "My BTC scalp" and d["market"] == "BTCUSDT" and d["levels"] == 10
+
+    await svc.stop_grid(7, iid)
+    assert (await svc.history(7))[0]["name"] == "My BTC scalp"   # name persists
+    await store.close()
+
+
+@pytest.mark.asyncio
+async def test_name_grid_rejects_a_grid_the_user_does_not_own(tmp_path):
+    store = SqliteStore(str(tmp_path / "n2.db"))
+    svc = _svc(store)
+    with pytest.raises(PermissionError):
+        await svc.name_grid(7, "BTCUSDT-0-nope", "x")
+    await store.close()

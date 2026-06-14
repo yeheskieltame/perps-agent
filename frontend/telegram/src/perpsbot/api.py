@@ -71,6 +71,13 @@ class WorkerAPI:
         """Recently closed grids: [{instance_id, market, realized_pnl, fill_count, winrate, closed_at}]."""
         return await self._req("GET", "/v1/history", user_id)
 
+    async def grid_detail(self, user_id: int, instance_id: str) -> dict:
+        """Full view of one active grid: config + live state + name + on-chain proofs."""
+        return await self._req("GET", f"/v1/grids/{instance_id}", user_id)
+
+    async def rename_grid(self, user_id: int, instance_id: str, name: str) -> dict:
+        return await self._req("PUT", f"/v1/grids/{instance_id}/name", user_id, {"name": name})
+
     async def stop(self, user_id: int, instance_id: str) -> dict:
         """Stop a grid. Returns {ok, proofs} — proofs carries the attest/memory tx
         hashes when the backend's verifiable loop is on-chain."""

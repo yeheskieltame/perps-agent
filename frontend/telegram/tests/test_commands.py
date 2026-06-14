@@ -64,6 +64,18 @@ class FakeAPI:
         self._maybe_fail()
         return getattr(self, "hist", [])
 
+    async def grid_detail(self, uid, iid):
+        self._maybe_fail()
+        return {"instance_id": iid, "name": getattr(self, "gname", ""), "market": "BTCUSDT",
+                "state": "RUNNING", "realized_pnl": "1.5", "fill_count": 7,
+                "lower": "99", "upper": "101", "levels": 10, "order_size": "0.001",
+                "leverage": "1", "bias": 0, "proofs": {"commit": "0x" + "ab" * 32}}
+
+    async def rename_grid(self, uid, iid, name):
+        self.calls.append(("rename", uid, iid, name))
+        self._maybe_fail()
+        return {"ok": True, "name": name}
+
     async def stop(self, uid, iid):
         self.calls.append(("stop", uid, iid))
         self._maybe_fail()
@@ -380,3 +392,34 @@ async def test_set_setting_invalid_is_a_toast_not_a_crash():
     api.fail = ApiError(400, "leverage: must be in [1, 100]")
     toast, new = await commands.set_setting(api, 42, "leverage", "999")
     assert new is None and "leverage" in toast
+
+
+def test_status_and_history_prefer_user_names():
+    rows = [{"instance_id": "i1", "state": "RUNNING", "realized_pnl": "0",
+             "fill_count": 0, "name": "My Grid"}]
+    assert "My Grid" in commands.render_status(rows)
+    hist = [{"instance_id": "i1", "market": "BTCUSDT", "realized_pnl": "0",
+             "fill_count": 0, "winrate": 0, "name": "My Grid"}]
+    assert "My Grid" in commands.render_history(hist)
+
+
+def test_render_detail_shows_config_and_proof():
+    d = {"instance_id": "BTCUSDT-0-a", "name": "BTC scalp", "market": "BTCUSDT",
+         "state": "RUNNING", "realized_pnl": "1.5", "fill_count": 7, "lower": "99",
+         "upper": "101", "levels": 10, "order_size": "0.001", "leverage": "1",
+         "proofs": {"commit": "0x" + "ab" * 32}}
+    out = commands.render_detail(d)
+    assert "BTC scalp" in out and "BTCUSDT" in out and "99" in out and "101" in out
+    assert "committed on-chain" in out
+
+
+async def test_detail_returns_text_and_data():
+    text, d = await commands.detail(FakeAPI(), 42, "BTCUSDT-0-a")
+    assert d is not None and "BTCUSDT" in text
+
+
+async def test_detail_handles_backend_error():
+    api = FakeAPI()
+    api.fail = ApiError(404, "no such grid")
+    text, d = await commands.detail(api, 42, "nope")
+    assert d is None

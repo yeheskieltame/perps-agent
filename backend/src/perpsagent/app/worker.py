@@ -183,9 +183,26 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
         rows = await service.status(_user_id(request))
         return web.json_response([
             {"instance_id": s.instance_id, "state": s.state,
-             "realized_pnl": s.realized_pnl, "fill_count": s.fill_count}
+             "realized_pnl": s.realized_pnl, "fill_count": s.fill_count, "name": s.name}
             for s in rows
         ])
+
+    async def detail(request: web.Request) -> web.Response:
+        d = await service.grid_detail(_user_id(request), request.match_info["instance_id"])
+        if d is None:
+            raise web.HTTPNotFound(reason="no such grid")
+        return web.json_response(d)
+
+    async def rename(request: web.Request) -> web.Response:
+        body = await request.json()
+        name = str(body.get("name", "")).strip()
+        if not name:
+            raise web.HTTPBadRequest(reason="name required")
+        try:
+            await service.name_grid(_user_id(request), request.match_info["instance_id"], name[:40])
+        except PermissionError as e:
+            raise web.HTTPConflict(reason=str(e)) from None
+        return web.json_response({"ok": True, "name": name[:40]})
 
     async def clear_stopped(request: web.Request) -> web.Response:
         return web.json_response({"cleared": await service.clear_stopped(_user_id(request))})
@@ -260,6 +277,8 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
     app.router.add_delete("/v1/grids/{instance_id}", stop)
     app.router.add_post("/v1/grids/{instance_id}/pause", pause)
     app.router.add_post("/v1/grids/clear", clear_stopped)
+    app.router.add_get("/v1/grids/{instance_id}", detail)
+    app.router.add_put("/v1/grids/{instance_id}/name", rename)
     app.router.add_get("/v1/status", status)
     app.router.add_get("/v1/history", history)
     app.router.add_get("/v1/balance", balance)

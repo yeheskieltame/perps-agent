@@ -224,9 +224,37 @@ def render_history(rows: list[dict]) -> str:
     lines = ["📜 <b>History</b> — recently closed grids"]
     for r in rows:
         wr = round(float(r.get("winrate", 0)) * 100)
-        lines.append(f"• <code>{r['instance_id']}</code> · {r.get('market', '?')}\n"
+        label = r.get("name") or r["instance_id"]
+        lines.append(f"• <b>{label}</b> · {r.get('market', '?')}\n"
                      f"     pnl <b>{r.get('realized_pnl', '0')}</b> · fills {r.get('fill_count', 0)} · win {wr}%")
     return "\n".join(lines)
+
+
+def render_detail(d: dict) -> str:
+    """Full single-grid view: config, live PnL, and on-chain proofs."""
+    icon = _STATE_ICON.get(d.get("state"), "•")
+    name = d.get("name") or d["instance_id"]
+    lines = [f"📈 <b>{name}</b>  {icon} {d.get('state')}",
+             f"<code>{d['instance_id']}</code>",
+             f"{d.get('market', '?')} · range {d.get('lower', '?')} – {d.get('upper', '?')}",
+             f"steps {d.get('levels', '?')} · size {d.get('order_size', '?')} · lev x{d.get('leverage', '?')}",
+             f"PnL <b>{d.get('realized_pnl', '0')}</b> · fills {d.get('fill_count', 0)}"]
+    proofs = d.get("proofs", {})
+    for kind, lbl in (("commit", "⛓ committed on-chain"), ("attest", "⛓ attested on-chain"),
+                      ("fee", "💸 builder fee on-chain")):
+        ln = _proof_line(proofs, kind, lbl)
+        if ln:
+            lines.append(ln.lstrip("\n"))
+    return "\n".join(lines)
+
+
+async def detail(api, user_id: int, instance_id: str) -> tuple[str, dict | None]:
+    """Fetch + render one grid's detail. Returns (text, detail|None)."""
+    try:
+        d = await api.grid_detail(user_id, instance_id)
+    except ApiError as e:
+        return (_err(e), None)
+    return (render_detail(d), d)
 
 
 async def history(api, user_id: int) -> str:
@@ -248,11 +276,11 @@ def render_status(rows: list[dict]) -> str:
     """Grid list for the My-Grids view (rows already fetched by the caller)."""
     if not rows:
         return "📭 No grids running. Tap 🚀 New Grid to launch one."
-    lines = ["📊 <b>Your grids</b>"]
+    lines = ["📊 <b>Your grids</b> — tap one for details / edit"]
     for r in rows:
         icon = _STATE_ICON.get(r["state"], "•")
-        lines.append(f"{icon} <code>{r['instance_id']}</code> — {r['state']}\n"
-                     f"     pnl {r['realized_pnl']} · fills {r['fill_count']}")
+        label = r.get("name") or r["instance_id"]
+        lines.append(f"{icon} <b>{label}</b> — {r['state']} · pnl {r['realized_pnl']} · fills {r['fill_count']}")
     return "\n".join(lines)
 
 

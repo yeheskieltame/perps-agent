@@ -25,9 +25,9 @@ from .api import WorkerAPI
 from .config import BotSettings, is_allowed
 from .keyboards import (
     KNOB_HELP, KNOB_LABEL, GridCB, MenuCB, PriceCB, SetCB, WizCB,
-    back_kb, config_kb, grids_kb, launched_kb, main_menu_kb, price_kb, price_result_kb,
-    setting_picker_kb, stop_confirm_kb, wiz_band_kb, wiz_confirm_kb, wiz_levels_kb,
-    wiz_market_kb, wiz_size_kb, wiz_strategy_kb,
+    back_kb, config_kb, detail_kb, grids_kb, launched_kb, main_menu_kb, price_kb,
+    price_result_kb, setting_picker_kb, stop_confirm_kb, wiz_band_kb, wiz_confirm_kb,
+    wiz_levels_kb, wiz_market_kb, wiz_size_kb, wiz_strategy_kb,
 )
 from .wizard import (
     PRESETS, GridWizard, parse_band_pct, parse_levels, parse_market, parse_size,
@@ -71,6 +71,12 @@ class Configure(StatesGroup):
     """A single custom config value: tap ✏️ Custom → reply with the value."""
 
     value = State()
+
+
+class Rename(StatesGroup):
+    """Naming a grid: tap ✏️ Rename → reply with the name."""
+
+    name = State()
 
 
 class Allowlist(BaseMiddleware):
@@ -432,6 +438,61 @@ async def cb_price_pick(cb: CallbackQuery, api: WorkerAPI, callback_data: PriceC
 async def _refresh_grids(cb: CallbackQuery, api: WorkerAPI) -> None:
     rows = await _safe_status(api, _uid(cb))
     await _edit(cb, commands.render_status(rows), grids_kb(rows))
+
+
+@router.callback_query(GridCB.filter(F.action == "detail"))
+async def cb_detail(cb: CallbackQuery, api: WorkerAPI, callback_data: GridCB) -> None:
+    await cb.answer()
+    text, d = await commands.detail(api, _uid(cb), callback_data.iid)
+    if d is None:
+        await _edit(cb, text, back_kb("grids"))
+        return
+    await _edit(cb, text, detail_kb(callback_data.iid, d.get("state") == "RUNNING"))
+
+
+@router.callback_query(GridCB.filter(F.action == "rename"))
+async def cb_rename(cb: CallbackQuery, state: FSMContext, callback_data: GridCB) -> None:
+    await cb.answer()
+    await state.set_state(Rename.name)
+    await state.update_data(rename_iid=callback_data.iid)
+    if isinstance(cb.message, Message):
+        await cb.message.answer("✏️ Send a name for this grid (e.g. <code>BTC scalp</code>). /cancel to abort.",
+                                reply_markup=ForceReply(input_field_placeholder="grid name"))
+
+
+@router.message(Rename.name)
+async def on_rename(m: Message, api: WorkerAPI, state: FSMContext) -> None:
+    iid = (await state.get_data()).get("rename_iid")
+    await state.clear()
+    if not iid:
+        return
+    name = (m.text or "").strip()[:40]
+    try:
+        await api.rename_grid(_uid(m), iid, name)
+    except Exception as e:  # noqa: BLE001 — surface any backend/transport failure
+        await m.answer(f"⚠️ Could not rename: {e}")
+        return
+    text, d = await commands.detail(api, _uid(m), iid)
+    kb = detail_kb(iid, d.get("state") == "RUNNING") if d else back_kb("grids")
+    await m.answer(f"✅ Renamed.\n\n{text}", reply_markup=kb)
+
+
+@router.callback_query(GridCB.filter(F.action == "edit"))
+async def cb_edit(cb: CallbackQuery, api: WorkerAPI, state: FSMContext, callback_data: GridCB) -> None:
+    """Edit = stop this grid and relaunch with new settings (engines are immutable)."""
+    try:
+        d = await api.grid_detail(_uid(cb), callback_data.iid)
+        await api.stop(_uid(cb), callback_data.iid)
+    except Exception as e:  # noqa: BLE001
+        await cb.answer(f"Couldn't edit: {e}"[:180], show_alert=True)
+        return
+    await cb.answer("Stopped — pick new settings")
+    market = d.get("market", "")
+    if isinstance(cb.message, Message):
+        sent = await cb.message.answer(f"🛠 <b>Edit {market}</b> — stopped. Pick a new style:",
+                                       reply_markup=wiz_strategy_kb())
+        await state.set_state(GridWizard.strategy)
+        await state.update_data(cfg={"market": market}, chat=sent.chat.id, mid=sent.message_id)
 
 
 @router.callback_query(GridCB.filter(F.action == "pause"))

@@ -208,6 +208,37 @@ KNOB_LABEL = {
     "timeframe": "Timeframe", "recenter": "Re-center",
 }
 
+# Plain-language explanation shown above each value picker — what it means, the unit,
+# and an example. Money knobs are in QUOTE units (USDT).
+KNOB_HELP = {
+    "band": "How far up & down from the current price the bot trades. <b>1 = ±1%</b>. "
+            "Smaller = tighter range, trades more often.",
+    "levels": "How many orders the bot spreads inside the range. More = finer grid, "
+              "more frequent little trades.",
+    "size": "How much of the coin each order uses (e.g. <code>0.001</code> BTC). "
+            "Bigger = bigger position and bigger risk.",
+    "leverage": "Multiplies your position size <b>and</b> risk. <b>x1</b> = no leverage "
+                "(safest); <b>x10</b> = 10× exposure.",
+    "max_inventory": "Safety cap on net position size. <b>0 = auto</b> (≈3× the grid). "
+                     "When hit, the bot stops adding to the position.",
+    "max_drawdown": "Auto-stop THIS grid if it loses this many <b>USDT</b>. <b>0 = off</b>. "
+                    "e.g. <code>50</code> → cancel &amp; flatten at −50 USDT.",
+    "account_dd": "Kill-switch for your WHOLE account: stop everything if wallet equity "
+                  "drops this many <b>USDT</b>. <b>0 = off</b>.",
+    "tp": "Bank the profit and close when this grid's total PnL reaches this many "
+          "<b>USDT</b>. <b>0 = off</b>. e.g. <code>10</code> → take profit at +10 USDT.",
+    "trail": "Lock gains: after a profit peak, close if PnL gives back this fraction. "
+             "<b>0 = off</b>; <code>0.3</code> = give back 30% of the peak.",
+    "trail_arm": "Profit (<b>USDT</b>) the grid must reach before trailing turns on. "
+                 "<b>0</b> = arm immediately.",
+    "bias": "Which way to lean. <b>Neutral</b> = both ways; <b>Long</b> = favor buys; "
+            "<b>Short</b> = favor sells.",
+    "timeframe": "The candle size the bot reads market structure on. <b>1m</b> = fast/scalpy, "
+                 "<b>1h–4h</b> = calmer.",
+    "recenter": "How often the bot re-centers the grid around the price. <b>Auto</b> = "
+                "derived from the timeframe.",
+}
+
 KNOB_PRESETS: dict[str, list[tuple[str, str]]] = {
     "band": [("±0.5%", "0.5"), ("±1%", "1"), ("±2%", "2"), ("±5%", "5")],
     "levels": [("6", "6"), ("10", "10"), ("20", "20"), ("50", "50")],

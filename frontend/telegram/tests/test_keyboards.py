@@ -18,6 +18,12 @@ def test_picker_marks_current_value_and_offers_custom():
     assert any("Custom" in t for t in flat) and any("Back" in t for t in flat)
 
 
+def test_every_knob_has_a_label_and_plain_help():
+    for key in keyboards.KNOB_PRESETS:
+        assert key in keyboards.KNOB_LABEL
+        assert keyboards.KNOB_HELP.get(key)            # picker explains what it means
+
+
 def test_config_kb_one_button_per_knob_shows_value():
     flat = _labels(keyboards.config_kb({"leverage": "1", "band": "1"}))
     assert any("Leverage: 1" in t for t in flat)

@@ -24,7 +24,7 @@ from . import commands
 from .api import WorkerAPI
 from .config import BotSettings, is_allowed
 from .keyboards import (
-    KNOB_LABEL, GridCB, MenuCB, PriceCB, SetCB, WizCB,
+    KNOB_HELP, KNOB_LABEL, GridCB, MenuCB, PriceCB, SetCB, WizCB,
     back_kb, config_kb, grids_kb, launched_kb, main_menu_kb, price_kb, price_result_kb,
     setting_picker_kb, stop_confirm_kb, wiz_band_kb, wiz_confirm_kb, wiz_levels_kb,
     wiz_market_kb, wiz_size_kb, wiz_strategy_kb,
@@ -371,8 +371,12 @@ async def cb_setting_open(cb: CallbackQuery, api: WorkerAPI, callback_data: SetC
     s = (await api.get_settings(_uid(cb))).get("settings", {})
     key = callback_data.key
     cur = s.get(key, "")
-    await _edit(cb, f"⚙️ <b>{KNOB_LABEL.get(key, key)}</b> — now: <b>{cur}</b>\nTap a value:",
-                setting_picker_kb(key, cur))
+    help_ = KNOB_HELP.get(key, "")
+    body = f"⚙️ <b>{KNOB_LABEL.get(key, key)}</b> — now: <b>{cur}</b>"
+    if help_:
+        body += f"\n{help_}"
+    body += "\n\nTap a value:"
+    await _edit(cb, body, setting_picker_kb(key, cur))
 
 
 @router.callback_query(SetCB.filter(F.kind == "set"))

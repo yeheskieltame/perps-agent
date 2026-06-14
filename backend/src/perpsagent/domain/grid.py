@@ -36,6 +36,16 @@ def quantize(value: Decimal, tick: Decimal, side: Side | None = None) -> Decimal
     return (value / tick).quantize(Decimal(1), rounding=rounding) * tick
 
 
+def quantize_qty(qty: Decimal, step: Decimal, min_qty: Decimal) -> Decimal:
+    """Round an order qty DOWN to the venue's qty step, never below the min order
+    size. Sending a qty that isn't a clean multiple of the step (or below the min)
+    makes the venue reject the order — which is how an unaligned auto-size lands a
+    'RUNNING' grid with zero resting orders."""
+    if step > 0:
+        qty = (qty / step).to_integral_value(rounding=ROUND_DOWN) * step
+    return qty if qty >= min_qty > 0 else (min_qty if min_qty > 0 else qty)
+
+
 def levels_for(lower: Decimal, upper: Decimal, n: int, spacing: Spacing) -> list[Decimal]:
     """Build n price levels in [lower, upper] with the given spacing. Shared by the
     initial grid and by live re-centering (same band width, shifted center)."""

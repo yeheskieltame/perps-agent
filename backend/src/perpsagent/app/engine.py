@@ -18,7 +18,8 @@ import hashlib
 from decimal import Decimal
 
 from ..domain.grid import (
-    _external_id, build_grid_orders, compute_paired_order, levels_for, plan_levels, quantize,
+    _external_id, build_grid_orders, compute_paired_order, levels_for, plan_levels,
+    quantize, quantize_qty,
 )
 from ..domain.models import EpisodeOutcome, Fill, GridConfig, GridState, Order, Side
 from ..domain.pnl import risk_adjusted
@@ -88,6 +89,9 @@ class GridEngine:
     async def start(self) -> list[Order]:
         meta = await self.ex.market_meta(self.cfg.market)
         self.tick = meta.tick_size
+        # Align the order size to the venue's qty step + min, or every order is
+        # rejected (an unaligned auto-size → RUNNING grid with zero resting orders).
+        self.cfg.order_size = quantize_qty(self.cfg.order_size, meta.step_size, meta.min_order_size)
         try:
             await self.ex.set_leverage(self.cfg.market, self.cfg.leverage)  # enforce user choice
         except Exception as e:  # noqa: BLE001 — leverage is best-effort, never block trading
@@ -145,9 +149,13 @@ class GridEngine:
         if self.state is GridState.HALTED:  # a guard fired — don't place into a halted grid
             return
         try:
-            await batch(orders)
-            for o in orders:
+            placed = await batch(orders)
+            accepted = [o for o in (placed or orders) if getattr(o, "order_id", None)]
+            for o in accepted:  # only track what the venue actually accepted
                 self._resting[o.external_id] = o
+            if orders and not accepted:  # whole batch rejected — make it loud, not silent
+                print(f"  ! grid {self.cfg.instance_id}: venue accepted 0/{len(orders)} orders "
+                      f"(size={self.cfg.order_size}) — check qty step / min order value / margin")
         except Exception as e:  # noqa: BLE001
             print(f"  ! batch place ({len(orders)} orders) failed: {e}")
 

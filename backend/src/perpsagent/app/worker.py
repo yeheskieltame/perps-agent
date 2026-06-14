@@ -99,8 +99,8 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
         resulting size/notional/bounds. The WORKER owns the sizing because it reads the
         live balance + price — the UI never computes against a balance. Margin precedence:
         explicit `margin` (USDT) > `margin_pct` (fraction of free balance) > template
-        default. Free balance = available margin, falling back to equity (Bybit testnet
-        UNIFIED often reports availableBalance as 0)."""
+        default. Free balance = the venue's available USDT margin (the adapter resolves
+        venue quirks); margin is the user's own capital, leverage is applied on top."""
         if template not in prefs.STRATEGY_TEMPLATES:
             raise web.HTTPBadRequest(reason=f"unknown template: {template}")
         if not market:
@@ -113,7 +113,7 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
         except PermissionError as e:
             raise web.HTTPConflict(reason=str(e)) from None
         tpl = prefs.STRATEGY_TEMPLATES[template]
-        free = bal.available if bal.available > 0 else bal.equity
+        free = bal.available  # USDT free margin — the % is of this, not total equity
         if margin not in (None, ""):
             margin_q = Decimal(str(margin))
         elif margin_pct not in (None, ""):

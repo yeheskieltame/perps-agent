@@ -12,11 +12,12 @@ from perpsagent.app.worker import build_worker_app
 from perpsagent.domain.models import BalanceView
 
 
-class _ZeroAvailExchange(FakeExchange):
-    """Bybit testnet UNIFIED quirk: availableBalance reported as 0 with healthy equity."""
+class _LowAvailExchange(FakeExchange):
+    """Open positions: free margin (available) is below total equity. The % must be
+    taken from `available`, never `equity`."""
 
     async def balance(self) -> BalanceView:
-        return BalanceView(equity=self._equity, available=Decimal("0"))
+        return BalanceView(equity=self._equity, available=Decimal("8000"))
 
 
 def test_autosize_scales_with_balance_leverage_and_levels():
@@ -93,16 +94,18 @@ async def test_worker_sizes_from_margin_pct_of_balance():
 
 
 @pytest.mark.asyncio
-async def test_margin_pct_falls_back_to_equity_when_available_is_zero():
-    svc = AppService(client_factory=lambda _u: _ZeroAvailExchange({"mid": "100", "equity": "10000"}))
+async def test_margin_pct_is_of_available_margin_not_equity():
+    # Positions open: available 8000 < equity 10000. 25% must size off the 8000 of
+    # free USDT margin (= 2000), NOT total equity (which would wrongly give 2500).
+    svc = AppService(client_factory=lambda _u: _LowAvailExchange({"mid": "100", "equity": "10000"}))
     c = await _client(build_worker_app(svc, "0"))
     try:
         r = await c.post("/v1/grids/preview", headers={"X-User-Id": "7"},
-                         json={"market": "BTCUSDT", "template": "safe", "margin_pct": "0.25"})
+                         json={"market": "BTCUSDT", "template": "balanced", "margin_pct": "0.25"})
         assert r.status == 200
         p = await r.json()
-        assert Decimal(p["margin"]) == Decimal("2500")           # 25% of EQUITY (available was 0)
-        assert Decimal(p["size"]) > 0                            # not "too low"
+        assert Decimal(p["margin"]) == Decimal("2000")           # 25% of AVAILABLE, not equity
+        assert Decimal(p["free_balance"]) == Decimal("8000")
     finally:
         await c.close()
 

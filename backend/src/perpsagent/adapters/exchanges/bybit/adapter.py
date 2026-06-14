@@ -18,7 +18,7 @@ import hmac
 import json
 import time
 from collections import OrderedDict
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any, AsyncIterator, Sequence
 
 from ....domain.grid import parse_external_id
@@ -274,11 +274,19 @@ class BybitExchange:
         return out
 
     async def balance(self) -> BalanceView:
+        """USDT margin on a UNIFIED account. `available` is the free margin a new grid
+        may commit: the USDT coin's availableToWithdraw, falling back to the account
+        figure, then the USDT wallet balance (testnet UNIFIED often returns
+        availableToWithdraw as "") — never the cross-coin totalEquity, which would
+        over-size against other coins and unrealized PnL."""
         res = await self._get("/v5/account/wallet-balance", {"accountType": "UNIFIED"})
         acct = res["list"][0]
-        equity = Decimal(acct.get("totalEquity") or "0")
-        avail = Decimal(acct.get("totalAvailableBalance") or "0")
-        return BalanceView(equity=equity, available=avail, currency="USDT")
+        usdt = next((c for c in acct.get("coin", []) if c.get("coin") == "USDT"), {})
+        wallet = _dec(usdt.get("walletBalance"))
+        available = (_dec(usdt.get("availableToWithdraw"))
+                     or _dec(acct.get("totalAvailableBalance")) or wallet)
+        equity = _dec(usdt.get("equity")) or wallet or _dec(acct.get("totalEquity"))
+        return BalanceView(equity=equity, available=available, currency="USDT")
 
     async def positions(self) -> Sequence[Position]:
         res = await self._get("/v5/position/list", {"category": self._category, "settleCoin": "USDT"})
@@ -394,6 +402,14 @@ class BybitExchange:
         if self._session is not None:
             await self._session.close()
             self._session = None
+
+
+def _dec(raw: Any) -> Decimal:
+    """Parse a Bybit numeric field; "" / None / missing → 0 (UNIFIED omits fields)."""
+    try:
+        return Decimal(raw)
+    except (InvalidOperation, TypeError):
+        return Decimal(0)
 
 
 def _chunked(items: list, n: int):

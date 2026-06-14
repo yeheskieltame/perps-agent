@@ -212,7 +212,8 @@ async def menu_snapshot(api, user_id: int) -> str:
         lines.append(f"\n📊 <b>Positions</b> · {len(grids)} grid(s)")
         for g in grids[:6]:
             icon = _STATE_ICON.get(g["state"], "•")
-            lines.append(f"{icon} <code>{g['instance_id']}</code>\n"
+            label = g.get("name") or g["instance_id"]
+            lines.append(f"{icon} <b>{label}</b>\n"
                          f"     {g['state']} · pnl {g['realized_pnl']} · fills {g['fill_count']}")
     else:
         lines.append("\n📭 No grids running — tap 🚀 <b>New Grid</b> to launch one")

@@ -199,9 +199,10 @@ async def stop_note(api, user_id: int, instance_id: str) -> str:
         resp = await api.stop(user_id, instance_id)
     except ApiError as e:
         return _err(e)
+    proofs = resp.get("proofs") if isinstance(resp, dict) else None
     return (f"🛑 Stopped <code>{instance_id}</code> — orders cancelled."
-            + _proof_line(resp.get("proofs") if isinstance(resp, dict) else None,
-                          "attest", "⛓ outcome attested on-chain"))
+            + _proof_line(proofs, "attest", "⛓ outcome attested on-chain")
+            + _proof_line(proofs, "fee", "💸 builder fee settled on-chain"))
 
 
 async def price_toast(api, user_id: int, market: str) -> str:
@@ -341,9 +342,10 @@ async def stop(api, user_id: int, args: str) -> str:
         resp = await api.stop(user_id, iid)
     except ApiError as e:
         return _err(e)
+    proofs = resp.get("proofs") if isinstance(resp, dict) else None
     return (f"🛑 Stopped <code>{iid}</code> — orders cancelled."
-            + _proof_line(resp.get("proofs") if isinstance(resp, dict) else None,
-                          "attest", "⛓ outcome attested on-chain"))
+            + _proof_line(proofs, "attest", "⛓ outcome attested on-chain")
+            + _proof_line(proofs, "fee", "💸 builder fee settled on-chain"))
 
 
 async def pause(api, user_id: int, args: str) -> str:

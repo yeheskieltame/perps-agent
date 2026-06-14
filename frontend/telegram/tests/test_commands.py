@@ -192,35 +192,10 @@ async def test_grid_surfaces_backend_refusal():
     assert "409" in out and "shard" in out
 
 
-async def test_settings_card_groups_and_marks_custom():
-    api = FakeAPI()
-    api.settings["leverage"] = "25"
-    api.customized = ["leverage"]
-    out = await commands.settings_show(api, 42)
-    for group in ("Grid shape", "Risk", "Exit", "Behavior"):
-        assert group in out
-    assert "leverage = 25</code> ✏️" in out and "/set KEY VALUE" in out
-
-
-async def test_set_saves_one_key_and_reset_restores():
-    api = FakeAPI()
-    out = await commands.set_value(api, 42, "leverage 25")
-    assert ("put_settings", 42, {"leverage": "25"}) in api.calls
-    assert "Saved" in out and "leverage = 25" in out and "NEW grid" in out
-    out = await commands.set_value(api, 42, "tf=1h")          # KEY=VALUE form too
-    assert ("put_settings", 42, {"tf": "1h"}) in api.calls
-    out = await commands.set_value(api, 42, "reset")
-    assert ("reset_settings", 42) in api.calls
-    assert "reset" in out.lower() and api.settings == DEFAULTS
-
-
-async def test_set_without_args_shows_card_and_bad_value_is_friendly():
-    api = FakeAPI()
-    assert "Config" in await commands.set_value(api, 42, "")
-    assert "Usage" in await commands.set_value(api, 42, "leverage")      # value missing
-    api.fail = ApiError(400, "unknown setting 'banana' — valid: band, levels, ...")
-    out = await commands.set_value(api, 42, "banana 1")
-    assert "unknown setting" in out and "400" not in out                 # friendly, not raw
+def test_grid_build_card_groups_knobs_for_the_market():
+    out = commands.grid_build_card("BTCUSDT", {"leverage": "25", "band": "1", "levels": "10"})
+    assert "New grid · BTCUSDT" in out and "Tap any value" in out
+    assert "leverage = 25" in out and "band = 1" in out
 
 
 async def test_status_empty_and_rows():
@@ -367,26 +342,19 @@ def test_render_status_empty_and_rows():
     assert "i1" in out and "RUNNING" in out
 
 
-def test_grid_confirm_text_shows_percent_and_style():
-    out = commands.grid_confirm_text("BTCUSDT", "0.01", 10, "0.001", style="balanced")
-    assert "BTCUSDT" in out and "±1%" in out and "Steps: <b>10</b>" in out
-    assert "Balanced" in out                                  # named style in the header
-    assert "Custom" in commands.grid_confirm_text("BTCUSDT", "0.01", 10, "0.001")
-
-
-async def test_create_grid_result_converts_band_to_percent_and_shows_commit():
+async def test_create_grid_result_launches_from_saved_settings_and_shows_commit():
     api = ProofAPI()
-    text, iid = await commands.create_grid_result(api, 42, "btcusdt", "0.015", 12, "0.002")
+    text, iid = await commands.create_grid_result(api, 42, "btcusdt")
     assert iid == "BTCUSDT-0-abc123"
     assert "Grid launched" in text and "committed on-chain" in text
     create = [c for c in api.calls if c[0] == "create"][-1]
-    assert create[3]["band"] == "1.5"          # fraction 0.015 → percent 1.5 for the knob
+    assert create[2] == "BTCUSDT" and create[3] is None   # uppercased, no per-call overrides
 
 
 async def test_create_grid_result_surfaces_validation_error():
     api = FakeAPI()
     api.fail = ApiError(400, "band: must be in [0.05, 10]")
-    text, iid = await commands.create_grid_result(api, 42, "BTCUSDT", "0.0001", 10, "0.001")
+    text, iid = await commands.create_grid_result(api, 42, "BTCUSDT")
     assert iid is None and "band" in text
 
 

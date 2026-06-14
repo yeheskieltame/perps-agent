@@ -24,8 +24,8 @@ def test_every_knob_has_a_label_and_plain_help():
         assert keyboards.KNOB_HELP.get(key)            # picker explains what it means
 
 
-def test_config_kb_one_button_per_knob_shows_value():
-    flat = _labels(keyboards.config_kb({"leverage": "1", "band": "1"}))
+def test_grid_build_kb_one_button_per_knob_plus_launch():
+    flat = _labels(keyboards.grid_build_kb({"leverage": "1", "band": "1"}))
     assert any("Leverage: 1" in t for t in flat)
     assert any("Range %: 1" in t for t in flat)
-    assert any("Reset" in t for t in flat)
+    assert any("Launch" in t for t in flat)

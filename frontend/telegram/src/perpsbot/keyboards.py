@@ -66,7 +66,7 @@ def main_menu_kb(connected: bool) -> InlineKeyboardMarkup:
     kb.row(_b("📊 My Grids", "grids"), _b("📋 Positions", "positions"))
     kb.row(_b("📑 Orders", "orders"), _b("📜 History", "history"))
     kb.row(_b("👛 Wallet", "wallet"), _b("💰 Balance", "balance"), _b("💱 Price", "price"))
-    kb.row(_b("⚙️ Config", "settings"), _b("💧 Top up", "topup"))
+    kb.row(_b("💧 Top up", "topup"))
     if connected:
         kb.row(_b("🔑 Re-connect", "connect"), _b("🗑 Disconnect", "disconnect"))
     else:
@@ -119,19 +119,6 @@ def wiz_margin_kb() -> InlineKeyboardMarkup:
     """How much balance to commit as margin — % of free balance, or a custom amount."""
     return _picker("margin", [("25%", "0.25"), ("50%", "0.5"), ("75%", "0.75"), ("100%", "1")],
                    per_row=4)
-
-
-def wiz_band_kb() -> InlineKeyboardMarkup:
-    return _picker("band", [("±0.5%", "0.5"), ("±1%", "1"), ("±2%", "2"), ("±5%", "5")],
-                   per_row=4)
-
-
-def wiz_levels_kb() -> InlineKeyboardMarkup:
-    return _picker("levels", [(v, v) for v in ("6", "10", "20", "50")], per_row=4)
-
-
-def wiz_size_kb() -> InlineKeyboardMarkup:
-    return _picker("size", [(v, v) for v in ("0.001", "0.005", "0.01", "0.05")], per_row=4)
 
 
 def wiz_confirm_kb() -> InlineKeyboardMarkup:
@@ -262,10 +249,10 @@ def price_result_kb(market: str) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-# ── config (per-user knobs), set entirely by tapping — no typing required ────
+# ── grid knobs, set entirely by tapping in the builder — no typing required ──
 
 # Friendly labels + tap-to-set presets per knob. Every picker also offers ✏️ Custom
-# (type /set KEY VALUE) for anything off-menu; the backend validates either way.
+# (reply with a value) for anything off-menu; the backend validates either way.
 KNOB_LABEL = {
     "band": "Range %", "levels": "Steps", "size": "Size/step", "leverage": "Leverage",
     "max_inventory": "Max inventory", "max_drawdown": "Max loss", "account_dd": "Account stop",
@@ -321,20 +308,25 @@ KNOB_PRESETS: dict[str, list[tuple[str, str]]] = {
 }
 
 
-def config_kb(settings: dict) -> InlineKeyboardMarkup:
-    """One button per knob (shows its current value) → opens a value picker. + Reset."""
+def grid_build_kb(settings: dict) -> InlineKeyboardMarkup:
+    """The 'Set it myself' builder: one tap-to-edit button per knob (shows its value),
+    then 🚀 Launch. Same picker UX as before, but it builds THIS grid."""
     kb = InlineKeyboardBuilder()
     for key in settings:
         label = KNOB_LABEL.get(key, key)
         kb.button(text=f"{label}: {settings[key]}", callback_data=SetCB(kind="open", key=key))
     kb.adjust(2)
-    kb.row(InlineKeyboardButton(text="↩️ Reset all", callback_data=MenuCB(action="reset").pack()))
-    _menu_row(kb)
+    kb.row(InlineKeyboardButton(text="🚀 Launch grid", callback_data=WizCB(field="launch", value="x").pack()))
+    kb.row(
+        InlineKeyboardButton(text="↩️ Defaults", callback_data=WizCB(field="defaults", value="x").pack()),
+        InlineKeyboardButton(text="⬅️ Styles", callback_data=WizCB(field="back", value="strategy").pack()),
+        InlineKeyboardButton(text="🧹 Cancel", callback_data=WizCB(field="cancel", value="x").pack()),
+    )
     return kb.as_markup()
 
 
 def setting_picker_kb(key: str, current: str) -> InlineKeyboardMarkup:
-    """Tap a preset value (current marked ✅), ✏️ Custom to type, or ⬅️ Back to config."""
+    """Tap a preset value (current marked ✅), ✏️ Custom to type, or ⬅️ Back to the builder."""
     kb = InlineKeyboardBuilder()
     for label, val in KNOB_PRESETS.get(key, []):
         mark = "✅ " if str(val) == str(current) else ""
@@ -342,6 +334,6 @@ def setting_picker_kb(key: str, current: str) -> InlineKeyboardMarkup:
     kb.adjust(3)
     kb.row(
         InlineKeyboardButton(text="✏️ Custom", callback_data=SetCB(kind="custom", key=key).pack()),
-        InlineKeyboardButton(text="⬅️ Back", callback_data=MenuCB(action="settings").pack()),
+        InlineKeyboardButton(text="⬅️ Back", callback_data=MenuCB(action="build").pack()),
     )
     return kb.as_markup()

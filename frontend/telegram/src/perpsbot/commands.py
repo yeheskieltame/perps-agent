@@ -18,9 +18,7 @@ HELP = (
     "/disconnect — forget your keys\n"
     "/grid MARKET [overrides] — launch a grid with YOUR settings\n"
     "    e.g. <code>/grid BTCUSDT</code> or <code>/grid MNTUSDT band=1.5 lev=25</code>\n"
-    "/config — tune parameters by tapping (leverage, range, take-profit, ...)\n"
-    "/set KEY VALUE — type one value, e.g. <code>/set leverage 25</code>\n"
-    "/set reset — back to defaults\n"
+    "    ✏️ Or tap New Grid → <b>Set it myself</b> to tune every value by tapping.\n"
     "/status — your grids (state, pnl, fills)\n"
     "/positions — live Bybit positions (size, entry, mark, PnL) + close\n"
     "/orders — your open Bybit orders\n"
@@ -139,17 +137,18 @@ SETTING_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
 ]
 
 GRID_USAGE = ("Usage: <code>/grid MARKET [KEY=VALUE ...]</code>\n"
-              "e.g. <code>/grid BTCUSDT</code> (your /settings) or "
+              "e.g. <code>/grid BTCUSDT</code> (your saved knobs) or "
               "<code>/grid MNTUSDT band=1.5 levels=4 lev=25</code>\n"
               "Old style still works: <code>/grid BTCUSDT 1 10 0.001</code> "
               "= ±1% band, 10 levels, 0.001/level")
 
 
-def settings_card(settings: dict, customized: list[str] | None = None) -> str:
-    """Render the grouped settings card. Keys the user changed get a ✏️ marker."""
-    custom = set(customized or [])
-    lines = ["⚙️ <b>Config</b> — tune the engine. <b>Tap any value to change it.</b>",
-             "<i>New here? You can ignore this — the New Grid presets pick good values.</i>"]
+def grid_build_card(market: str, settings: dict) -> str:
+    """The 'Set it myself' builder header + the grouped knobs for THIS grid. Tap a
+    value below to change it, then 🚀 Launch."""
+    lines = [f"➕ <b>New grid · {market}</b> — set it your way.",
+             "<b>Tap any value below to change it</b>, then 🚀 Launch.",
+             "<i>Not sure? ⬅️ Styles has one-tap presets.</i>"]
     shown = set()
     for group, keys in SETTING_GROUPS:
         rows = [(k, hint) for k, hint in keys if k in settings]
@@ -157,13 +156,10 @@ def settings_card(settings: dict, customized: list[str] | None = None) -> str:
             continue
         lines.append(f"\n<b>{group}</b>")
         for k, hint in rows:
-            mark = " ✏️" if k in custom else ""
-            lines.append(f"  <code>{k} = {settings[k]}</code>{mark} — {hint}")
+            lines.append(f"  <code>{k} = {settings[k]}</code> — {hint}")
             shown.add(k)
     for k in sorted(set(settings) - shown):  # backend added a knob the card doesn't know
         lines.append(f"  <code>{k} = {settings[k]}</code>")
-    lines.append("\nChange one: <code>/set KEY VALUE</code> · reset: <code>/set reset</code>\n"
-                 "Override once: <code>/grid MARKET KEY=VALUE ...</code>")
     return "\n".join(lines)
 
 
@@ -337,16 +333,6 @@ WIZ_STRATEGY = ("Step 2 of 2 — <b>How should it trade?</b>\n"
                 "⚖️ <b>Balanced</b> — the all-rounder (recommended)\n"
                 "🔥 <b>Aggressive</b> — wide range, bigger swings, more risk")
 
-WIZ_BAND = ("📏 <b>Range</b> — how far up & down from the current price the bot works.\n"
-            "<b>±1%</b> means it trades between −1% and +1% of the price right now.\n"
-            "Smaller = tighter range, trades more often. Tap a preset or type a number:")
-
-WIZ_LEVELS = ("🪜 <b>Steps</b> — how many orders the bot spreads inside that range.\n"
-              "More steps = finer grid, more frequent little trades. Tap or type:")
-
-WIZ_SIZE = ("🎚 <b>Size per step</b> — how much of the coin each order uses (e.g. "
-            "<code>0.001</code> BTC).\nBigger = bigger position and bigger risk. Tap or type:")
-
 _STRATEGY_LABEL = {"safe": "🛡 Safe", "balanced": "⚖️ Balanced", "aggressive": "🔥 Aggressive"}
 
 # Plain blurb per template (kept in sync with the backend STRATEGY_TEMPLATES). Size is
@@ -401,34 +387,18 @@ async def create_template_result(api, user_id: int, market: str, template: str,
     return text, iid
 
 
-def grid_confirm_text(market: str, band: str, levels: int, size: str,
-                      style: str | None = None) -> str:
-    """Wizard review screen, in plain language. `band` is a FRACTION ('0.01')."""
-    pct = (Decimal(band) * 100).normalize()
-    head = f"➕ <b>Review</b> · {_STRATEGY_LABEL.get(style, '✏️ Custom')}"
-    return (f"{head}\n"
-            f"Coin: <b>{market}</b>\n"
-            f"Range: <b>±{pct}%</b> around the current price\n"
-            f"Steps: <b>{levels}</b> orders · Size: <b>{size}</b> each\n\n"
-            f"The bot will buy on dips and sell on rises inside that range, automatically.\n"
-            f"Leverage & safety limits come from your /settings.\n\n"
-            f"Tap ✅ Launch — it records the setup on-chain, then starts trading.")
-
-
-async def create_grid_result(api, user_id: int, market: str, band: str, levels,
-                             size: str) -> tuple[str, str | None]:
-    """Launch from the wizard cfg. `band` is a fraction → convert to the percent the
-    backend's band knob expects. Returns (reply, instance_id|None)."""
-    band_pct = str((Decimal(band) * 100).normalize())
+async def create_grid_result(api, user_id: int, market: str) -> tuple[str, str | None]:
+    """Launch a grid from the user's saved knob settings — the 'Set it myself' builder
+    edits those, snapshotted into the grid at launch. Returns (reply, instance_id|None)."""
     try:
-        resp = await api.create_grid(user_id, market.upper(),
-                                     {"band": band_pct, "levels": str(levels), "size": str(size)})
+        resp = await api.create_grid(user_id, market.upper())
     except ApiError as e:
         return (f"❌ {e.detail or 'invalid grid'}" if e.status == 400 else _err(e)), None
     iid, eff = resp["instance_id"], resp.get("effective", {})
     text = (f"✅ <b>Grid launched</b>\n<code>{iid}</code>\n"
             f"{market.upper()} [{resp.get('lower', '?')}, {resp.get('upper', '?')}] · "
-            f"{eff.get('levels', '?')} levels · {eff.get('size', '?')}/level"
+            f"{eff.get('levels', '?')} levels · {eff.get('size', '?')}/level · "
+            f"lev x{eff.get('leverage', '?')}"
             + _proof_line(resp.get("proofs"), "commit", "⛓ committed on-chain"))
     return text, iid
 
@@ -488,39 +458,6 @@ async def cycle_setting(api, user_id: int, key: str, next_value) -> tuple[str, d
     return (f"{key} → {new}", resp.get("settings", {}))
 
 
-async def settings_show(api, user_id: int) -> str:
-    try:
-        resp = await api.get_settings(user_id)
-    except ApiError as e:
-        return _err(e)
-    return settings_card(resp.get("settings", {}), resp.get("customized"))
-
-
-async def set_value(api, user_id: int, args: str) -> str:
-    """/set — show card; /set KEY VALUE (or KEY=VALUE) — change one; /set reset."""
-    parts = args.replace("=", " ").split()
-    if not parts:
-        return await settings_show(api, user_id)
-    if parts[0].lower() == "reset":
-        try:
-            resp = await api.reset_settings(user_id)
-        except ApiError as e:
-            return _err(e)
-        return "↩️ Settings reset to defaults.\n\n" + settings_card(resp.get("settings", {}))
-    if len(parts) != 2:
-        return ("Usage: <code>/set KEY VALUE</code>, e.g. <code>/set leverage 25</code>\n"
-                "See your keys with /settings · <code>/set reset</code> for defaults")
-    key, value = parts
-    try:
-        resp = await api.put_settings(user_id, {key: value})
-    except ApiError as e:
-        if e.status == 400:  # validation message is user-facing by design
-            return f"❌ {e.detail or 'invalid setting'}"
-        return _err(e)
-    changed = ", ".join(f"<code>{k} = {resp['settings'][k]}</code>"
-                        for k in resp.get("updated", []) if k in resp.get("settings", {}))
-    return (f"✅ Saved: {changed}\n"
-            f"Applies to every NEW grid (running grids keep their config). /settings to review.")
 
 
 def _parse_grid_args(args: str) -> tuple[str, dict] | str:

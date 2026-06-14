@@ -25,13 +25,11 @@ from .api import WorkerAPI
 from .config import BotSettings, is_allowed
 from .keyboards import (
     KNOB_HELP, KNOB_LABEL, GridCB, MenuCB, PosCB, PriceCB, SetCB, WizCB,
-    back_kb, bulk_confirm_kb, config_kb, detail_kb, grids_kb, launched_kb, main_menu_kb,
+    back_kb, bulk_confirm_kb, detail_kb, grid_build_kb, grids_kb, launched_kb, main_menu_kb,
     orders_kb, pos_confirm_kb, positions_kb, price_kb, price_result_kb, setting_picker_kb,
-    stop_confirm_kb,
-    wiz_band_kb, wiz_confirm_kb, wiz_levels_kb, wiz_margin_kb, wiz_market_kb, wiz_size_kb,
-    wiz_strategy_kb,
+    stop_confirm_kb, wiz_confirm_kb, wiz_margin_kb, wiz_market_kb, wiz_strategy_kb,
 )
-from .wizard import GridWizard, parse_band_pct, parse_levels, parse_market, parse_size
+from .wizard import GridWizard, parse_market
 
 router = Router()
 
@@ -46,7 +44,6 @@ _COMMANDS = [
     BotCommand(command="topup", description="💧 Fund your MNT wallet"),
     BotCommand(command="balance", description="💰 Venue equity"),
     BotCommand(command="price", description="💱 Live top-of-book"),
-    BotCommand(command="config", description="⚙️ Config — tap to tune parameters"),
     BotCommand(command="connect", description="🔑 Link Bybit API keys (DM)"),
     BotCommand(command="help", description="ℹ️ Help"),
 ]
@@ -242,18 +239,6 @@ async def cmd_topup(message: Message, api: WorkerAPI) -> None:
     await message.answer(await commands.topup(api, _uid(message)), reply_markup=back_kb("topup"))
 
 
-@router.message(Command("config", "settings"))
-async def cmd_config(message: Message, api: WorkerAPI) -> None:
-    resp = await api.get_settings(_uid(message))
-    s = resp.get("settings", {})
-    await message.answer(commands.settings_card(s, resp.get("customized")), reply_markup=config_kb(s))
-
-
-@router.message(Command("set"))
-async def cmd_set(message: Message, api: WorkerAPI) -> None:
-    await message.answer(await commands.set_value(api, _uid(message), _args(message)))
-
-
 # ── /connect dialog (DM-only FSM) ────────────────────────────────────────────
 
 @router.message(Command("cancel"))
@@ -392,14 +377,9 @@ async def cb_menu(cb: CallbackQuery, api: WorkerAPI, state: FSMContext,
         await _edit(cb, await commands.wallet(api, uid), back_kb("wallet"))
     elif action == "topup":
         await _edit(cb, await commands.topup(api, uid), back_kb("topup"))
-    elif action == "settings":
-        resp = await api.get_settings(uid)
-        s = resp.get("settings", {})
-        await _edit(cb, commands.settings_card(s, resp.get("customized")), config_kb(s))
-    elif action == "reset":
-        resp = await api.reset_settings(uid)
-        s = resp.get("settings", {})
-        await _edit(cb, "↩️ Config reset to defaults.\n\n" + commands.settings_card(s), config_kb(s))
+    elif action == "build":  # ⬅️ Back from a value picker → the Set-it-myself builder
+        text, kb = await _build_screen(api, uid, state)
+        await _edit(cb, text, kb)
     elif action == "help":
         await _edit(cb, commands.HELP, back_kb())
 
@@ -421,11 +401,12 @@ async def cb_setting_open(cb: CallbackQuery, api: WorkerAPI, callback_data: SetC
 
 
 @router.callback_query(SetCB.filter(F.kind == "set"))
-async def cb_setting_set(cb: CallbackQuery, api: WorkerAPI, callback_data: SetCB) -> None:
+async def cb_setting_set(cb: CallbackQuery, api: WorkerAPI, state: FSMContext, callback_data: SetCB) -> None:
     toast, new = await commands.set_setting(api, _uid(cb), callback_data.key, callback_data.val)
     await cb.answer(toast, show_alert=new is None)   # alert only on error
     if new is not None:
-        await _edit(cb, commands.settings_card(new), config_kb(new))
+        text, kb = await _build_screen(api, _uid(cb), state)
+        await _edit(cb, text, kb)
 
 
 @router.callback_query(SetCB.filter(F.kind == "custom"))
@@ -455,8 +436,10 @@ async def on_config_value(m: Message, api: WorkerAPI, state: FSMContext) -> None
         await m.answer(f"{toast}\nTry again, or /cancel.",
                        reply_markup=ForceReply(input_field_placeholder=f"new {label} value"))
         return
-    await state.clear()
-    await m.answer(f"✅ {label} set.\n\n" + commands.settings_card(new), reply_markup=config_kb(new))
+    await state.set_state(GridWizard.build)
+    text, kb = await _build_screen(api, _uid(m), state)
+    sent = await m.answer(f"✅ {label} set.\n\n" + text, reply_markup=kb)
+    await state.update_data(mid=sent.message_id, chat=sent.chat.id)
 
 
 # ── price picker ─────────────────────────────────────────────────────────────
@@ -619,31 +602,19 @@ async def _go_strategy(bot: Bot, state: FSMContext, market: str) -> None:
                      wiz_strategy_kb())
 
 
-async def _go_band(bot: Bot, state: FSMContext) -> None:
-    """Manual path: market is already set; ask for the range."""
-    await state.set_state(GridWizard.band)
-    await _send_step(bot, state, commands.WIZ_BAND, wiz_band_kb())
+async def _build_screen(api: WorkerAPI, user_id: int, state: FSMContext) -> tuple[str, object]:
+    """(text, keyboard) for the Set-it-myself builder: the saved knobs for this grid
+    + 🚀 Launch. Tapping a value edits the saved settings, snapshotted at launch."""
+    market = (await _cfg(state)).get("market", "")
+    s = (await api.get_settings(user_id)).get("settings", {})
+    return commands.grid_build_card(market, s), grid_build_kb(s)
 
 
-async def _go_levels(bot: Bot, state: FSMContext, band: str) -> None:
-    from decimal import Decimal
-    await _set(state, "band", band)
-    await state.set_state(GridWizard.levels)
-    pct = (Decimal(band) * 100).normalize()
-    await _send_step(bot, state, f"Range set to ±{pct}% ✓\n\n{commands.WIZ_LEVELS}", wiz_levels_kb())
-
-
-async def _go_size(bot: Bot, state: FSMContext, levels: int) -> None:
-    await _set(state, "levels", levels)
-    await state.set_state(GridWizard.size)
-    await _send_step(bot, state, f"Steps: {levels} ✓\n\n{commands.WIZ_SIZE}", wiz_size_kb())
-
-
-async def _go_confirm(bot: Bot, state: FSMContext, size: str) -> None:
-    cfg = await _set(state, "size", size)
-    await state.set_state(GridWizard.confirm)
-    await _send_step(bot, state, commands.grid_confirm_text(
-        cfg["market"], cfg["band"], cfg["levels"], cfg["size"]), wiz_confirm_kb())
+async def _go_build(bot: Bot, api: WorkerAPI, state: FSMContext, user_id: int) -> None:
+    """Manual path: market is set; open the single-screen knob builder."""
+    await state.set_state(GridWizard.build)
+    text, kb = await _build_screen(api, user_id, state)
+    await _send_step(bot, state, text, kb)
 
 
 @router.callback_query(GridWizard.market, WizCB.filter(F.field == "market"))
@@ -669,13 +640,13 @@ async def wiz_market_text(message: Message, state: FSMContext, bot: Bot, setting
     await _go_strategy(bot, state, market)
 
 
-# Step 2 — strategy: a one-tap preset, or "Set it myself" → manual range/steps/size
+# Step 2 — strategy: a one-tap preset, or "Set it myself" → the single-screen builder
 @router.callback_query(GridWizard.strategy, WizCB.filter(F.field == "preset"))
-async def wiz_strategy_pick(cb: CallbackQuery, state: FSMContext, bot: Bot,
+async def wiz_strategy_pick(cb: CallbackQuery, api: WorkerAPI, state: FSMContext, bot: Bot,
                             callback_data: WizCB) -> None:
     await cb.answer()
     if callback_data.value == "custom":
-        await _go_band(bot, state)
+        await _go_build(bot, api, state, _uid(cb))
         return
     cfg = await _cfg(state)
     cfg["template"] = callback_data.value
@@ -728,64 +699,35 @@ async def wiz_margin_text(message: Message, api: WorkerAPI, state: FSMContext, b
     await _preview_confirm(bot, api, state, _uid(message), margin=margin)
 
 
-@router.callback_query(GridWizard.band, WizCB.filter(F.field == "band"))
-async def wiz_band_pick(cb: CallbackQuery, state: FSMContext, bot: Bot, callback_data: WizCB) -> None:
+# Set-it-myself builder: tap-to-edit knobs (SetCB handlers above) + these footer actions.
+@router.callback_query(GridWizard.build, WizCB.filter(F.field == "launch"))
+async def wiz_launch(cb: CallbackQuery, api: WorkerAPI, state: FSMContext) -> None:
+    market = (await _cfg(state)).get("market", "")
+    text, iid = await commands.create_grid_result(api, _uid(cb), market)
+    if iid is None:  # validation / connection error — keep the builder open to fix
+        await cb.answer("Couldn't launch")
+        card, kb = await _build_screen(api, _uid(cb), state)
+        await _edit(cb, f"{text}\n\n{card}", kb)
+        return
+    await cb.answer("Launched")
+    await _edit(cb, text, launched_kb(iid))
+    await state.clear()
+
+
+@router.callback_query(GridWizard.build, WizCB.filter(F.field == "back"))
+async def wiz_back_to_strategy(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.answer()
-    if callback_data.value == "custom":
-        await _edit_wiz(bot, state, "Type the range in %, e.g. <code>1</code> for ±1%:", wiz_band_kb())
-        return
-    await _go_levels(bot, state, parse_band_pct(callback_data.value))
+    market = (await _cfg(state)).get("market", "")
+    await state.set_state(GridWizard.strategy)
+    await _edit(cb, f"Coin: <b>{market}</b> ✓\n\n{commands.WIZ_STRATEGY}", wiz_strategy_kb())
 
 
-@router.message(GridWizard.band)
-async def wiz_band_text(message: Message, state: FSMContext, bot: Bot) -> None:
-    await _drop(message)
-    try:
-        band = parse_band_pct(message.text or "")
-    except ValueError as e:
-        await _edit_wiz(bot, state, f"⚠️ {e}\n\n{commands.WIZ_BAND}", wiz_band_kb())
-        return
-    await _go_levels(bot, state, band)
-
-
-@router.callback_query(GridWizard.levels, WizCB.filter(F.field == "levels"))
-async def wiz_levels_pick(cb: CallbackQuery, state: FSMContext, bot: Bot, callback_data: WizCB) -> None:
-    await cb.answer()
-    if callback_data.value == "custom":
-        await _edit_wiz(bot, state, "Type how many steps (2–200):", wiz_levels_kb())
-        return
-    await _go_size(bot, state, parse_levels(callback_data.value))
-
-
-@router.message(GridWizard.levels)
-async def wiz_levels_text(message: Message, state: FSMContext, bot: Bot) -> None:
-    await _drop(message)
-    try:
-        levels = parse_levels(message.text or "")
-    except ValueError as e:
-        await _edit_wiz(bot, state, f"⚠️ {e}\n\n{commands.WIZ_LEVELS}", wiz_levels_kb())
-        return
-    await _go_size(bot, state, levels)
-
-
-@router.callback_query(GridWizard.size, WizCB.filter(F.field == "size"))
-async def wiz_size_pick(cb: CallbackQuery, state: FSMContext, bot: Bot, callback_data: WizCB) -> None:
-    await cb.answer()
-    if callback_data.value == "custom":
-        await _edit_wiz(bot, state, "Type the size per step, e.g. <code>0.001</code>:", wiz_size_kb())
-        return
-    await _go_confirm(bot, state, parse_size(callback_data.value))
-
-
-@router.message(GridWizard.size)
-async def wiz_size_text(message: Message, state: FSMContext, bot: Bot) -> None:
-    await _drop(message)
-    try:
-        size = parse_size(message.text or "")
-    except ValueError as e:
-        await _edit_wiz(bot, state, f"⚠️ {e}\n\n{commands.WIZ_SIZE}", wiz_size_kb())
-        return
-    await _go_confirm(bot, state, size)
+@router.callback_query(GridWizard.build, WizCB.filter(F.field == "defaults"))
+async def wiz_defaults(cb: CallbackQuery, api: WorkerAPI, state: FSMContext) -> None:
+    await api.reset_settings(_uid(cb))
+    await cb.answer("Reset to defaults")
+    text, kb = await _build_screen(api, _uid(cb), state)
+    await _edit(cb, text, kb)
 
 
 @router.callback_query(WizCB.filter(F.field == "cancel"))
@@ -799,14 +741,12 @@ async def wiz_cancel(cb: CallbackQuery, api: WorkerAPI, state: FSMContext, bot: 
 
 @router.callback_query(GridWizard.confirm, WizCB.filter(F.field == "confirm"))
 async def wiz_confirm(cb: CallbackQuery, api: WorkerAPI, state: FSMContext, bot: Bot) -> None:
+    """Confirm a one-tap template launch (the Set-it-myself path launches from its
+    own builder screen)."""
     cfg = await _cfg(state)
     await cb.answer("Launching…")
-    if cfg.get("template"):
-        text, iid = await commands.create_template_result(
-            api, _uid(cb), cfg["market"], cfg["template"], cfg.get("margin"), cfg.get("margin_pct"))
-    else:
-        text, iid = await commands.create_grid_result(
-            api, _uid(cb), cfg["market"], cfg["band"], cfg["levels"], cfg["size"])
+    text, iid = await commands.create_template_result(
+        api, _uid(cb), cfg["market"], cfg["template"], cfg.get("margin"), cfg.get("margin_pct"))
     await _send_step(bot, state, text, launched_kb(iid) if iid else back_kb())
     await state.clear()
 

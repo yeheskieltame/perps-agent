@@ -288,3 +288,50 @@ async def test_wallet_unavailable_is_friendly():
     api.fail = ApiError(503, "wallet storage not configured")
     out = await commands.wallet(api, 42)
     assert "unavailable" in out.lower() and "503" not in out
+
+
+# ── one-screen home + wizard renderers (PR #48 UI over this branch's logic) ──
+
+async def test_menu_snapshot_not_connected_shows_wallet_and_empty_positions():
+    out = await commands.menu_snapshot(FakeAPI(), 42)
+    assert "Not connected" in out
+    assert "MNT wallet" in out and "1.5000 MNT" in out
+    assert "No grids running" in out
+
+
+async def test_menu_snapshot_connected_lists_positions_and_equity():
+    api = FakeAPI()
+    api.creds = {"connected": True, "testnet": True, "key_preview": "cR8x…"}
+    api.rows = [{"instance_id": "BTCUSDT-0-ab", "state": "RUNNING",
+                 "realized_pnl": "0", "fill_count": 3}]
+    out = await commands.menu_snapshot(api, 42)
+    assert "Bybit testnet" in out and "73193.62" in out
+    assert "Positions" in out and "BTCUSDT-0-ab" in out
+
+
+def test_render_status_empty_and_rows():
+    assert "No grids" in commands.render_status([])
+    out = commands.render_status([{"instance_id": "i1", "state": "RUNNING",
+                                   "realized_pnl": "1.2", "fill_count": 5}])
+    assert "i1" in out and "RUNNING" in out
+
+
+def test_grid_confirm_text_shows_percent():
+    out = commands.grid_confirm_text("BTCUSDT", "0.01", 10, "0.001")
+    assert "BTCUSDT" in out and "±1%" in out and "10 levels" in out
+
+
+async def test_create_grid_result_converts_band_to_percent_and_shows_commit():
+    api = ProofAPI()
+    text, iid = await commands.create_grid_result(api, 42, "btcusdt", "0.015", 12, "0.002")
+    assert iid == "BTCUSDT-0-abc123"
+    assert "Grid launched" in text and "committed on-chain" in text
+    create = [c for c in api.calls if c[0] == "create"][-1]
+    assert create[3]["band"] == "1.5"          # fraction 0.015 → percent 1.5 for the knob
+
+
+async def test_create_grid_result_surfaces_validation_error():
+    api = FakeAPI()
+    api.fail = ApiError(400, "band: must be in [0.05, 10]")
+    text, iid = await commands.create_grid_result(api, 42, "BTCUSDT", "0.0001", 10, "0.001")
+    assert iid is None and "band" in text

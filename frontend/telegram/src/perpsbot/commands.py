@@ -3,6 +3,8 @@ reply string (HTML). No aiogram imports, so every path is unit-testable offline.
 """
 from __future__ import annotations
 
+from decimal import Decimal
+
 from .api import ApiError
 
 HELP = (
@@ -181,6 +183,74 @@ async def dashboard_data(api, user_id: int) -> tuple[dict | None, dict | None, l
     except ApiError:
         pass
     return creds, balance, grids
+
+
+async def menu_snapshot(api, user_id: int) -> str:
+    """The one-screen home info card (Polymarket-style): connection · Bybit equity ·
+    MNT wallet · positions. Every backend call degrades independently."""
+    creds, balance, grids = await dashboard_data(api, user_id)
+    wallet = None
+    try:
+        wallet = await api.wallet(user_id)
+    except ApiError:
+        pass
+    lines = ["🤖 <b>Perps Agent</b> — verifiable grid trading on Mantle"]
+    if creds and creds.get("connected"):
+        env = "testnet" if creds.get("testnet", True) else "⚠️ MAINNET"
+        eq = f" · 💰 <b>{balance['equity']} {balance['currency']}</b>" if balance else ""
+        lines.append(f"🔑 Bybit {env} ({creds.get('key_preview', '?')}){eq}")
+    else:
+        lines.append("🔑 <b>Not connected</b> — tap 🔑 Connect Bybit keys")
+    if wallet:
+        lines.append(f"👛 MNT wallet: <b>{_mnt(wallet.get('balance', 0))} MNT</b> — pays fees (💧 Top up)")
+    if grids:
+        lines.append(f"\n📊 <b>Positions</b> · {len(grids)} grid(s)")
+        for g in grids[:6]:
+            icon = _STATE_ICON.get(g["state"], "•")
+            lines.append(f"{icon} <code>{g['instance_id']}</code>\n"
+                         f"     {g['state']} · pnl {g['realized_pnl']} · fills {g['fill_count']}")
+    else:
+        lines.append("\n📭 No grids running — tap 🚀 <b>New Grid</b> to launch one")
+    return "\n".join(lines)
+
+
+def render_status(rows: list[dict]) -> str:
+    """Grid list for the My-Grids view (rows already fetched by the caller)."""
+    if not rows:
+        return "📭 No grids running. Tap 🚀 New Grid to launch one."
+    lines = ["📊 <b>Your grids</b>"]
+    for r in rows:
+        icon = _STATE_ICON.get(r["state"], "•")
+        lines.append(f"{icon} <code>{r['instance_id']}</code> — {r['state']}\n"
+                     f"     pnl {r['realized_pnl']} · fills {r['fill_count']}")
+    return "\n".join(lines)
+
+
+def grid_confirm_text(market: str, band: str, levels: int, size: str) -> str:
+    """Wizard review screen. `band` is a half-band FRACTION ('0.01'); show it as %."""
+    pct = (Decimal(band) * 100).normalize()
+    return (f"➕ <b>Review your grid</b>\n"
+            f"{market} · ±{pct}% band · {levels} levels · {size}/level\n"
+            f"Leverage, bias and guards come from your /settings.\n\n"
+            f"Tap ✅ Launch — it commits the config on-chain, then starts.")
+
+
+async def create_grid_result(api, user_id: int, market: str, band: str, levels,
+                             size: str) -> tuple[str, str | None]:
+    """Launch from the wizard cfg. `band` is a fraction → convert to the percent the
+    backend's band knob expects. Returns (reply, instance_id|None)."""
+    band_pct = str((Decimal(band) * 100).normalize())
+    try:
+        resp = await api.create_grid(user_id, market.upper(),
+                                     {"band": band_pct, "levels": str(levels), "size": str(size)})
+    except ApiError as e:
+        return (f"❌ {e.detail or 'invalid grid'}" if e.status == 400 else _err(e)), None
+    iid, eff = resp["instance_id"], resp.get("effective", {})
+    text = (f"✅ <b>Grid launched</b>\n<code>{iid}</code>\n"
+            f"{market.upper()} [{resp.get('lower', '?')}, {resp.get('upper', '?')}] · "
+            f"{eff.get('levels', '?')} levels · {eff.get('size', '?')}/level"
+            + _proof_line(resp.get("proofs"), "commit", "⛓ committed on-chain"))
+    return text, iid
 
 
 async def launch_note(api, user_id: int, market: str) -> str:

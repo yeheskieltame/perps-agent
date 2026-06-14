@@ -69,6 +69,10 @@ async def test_grid_name_flows_into_status_detail_and_history(tmp_path):
 
     d = await svc.grid_detail(7, iid)
     assert d["name"] == "My BTC scalp" and d["market"] == "BTCUSDT" and d["levels"] == 10
+    # PnL is exposed with a value + percentage + position for the detail card.
+    for k in ("realized_pnl", "unrealized_pnl", "total_pnl", "pnl_pct", "position", "margin"):
+        assert k in d
+    assert d["position"] == "0" and d["total_pnl"] == "0"   # flat, no fills yet
 
     await svc.stop_grid(7, iid)
     assert (await svc.history(7))[0]["name"] == "My BTC scalp"   # name persists

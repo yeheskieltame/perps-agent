@@ -518,14 +518,29 @@ def test_status_and_history_prefer_user_names():
     assert "My Grid" in commands.render_history(hist)
 
 
-def test_render_detail_shows_config_and_proof():
+def test_render_detail_shows_pnl_with_unit_percent_and_proof():
     d = {"instance_id": "BTCUSDT-0-a", "name": "BTC scalp", "market": "BTCUSDT",
-         "state": "RUNNING", "realized_pnl": "1.5", "fill_count": 7, "lower": "99",
-         "upper": "101", "levels": 10, "order_size": "0.001", "leverage": "1",
+         "state": "RUNNING", "realized_pnl": "1.5", "unrealized_pnl": "-0.5",
+         "total_pnl": "1.0", "pnl_pct": "2.5", "position": "0.003", "avg_entry": "100",
+         "fill_count": 7, "lower": "99", "upper": "101", "levels": 10,
+         "order_size": "0.001", "leverage": "5", "margin": "20", "notional": "100",
          "proofs": {"commit": "0x" + "ab" * 32}}
     out = commands.render_detail(d)
-    assert "BTC scalp" in out and "BTCUSDT" in out and "99" in out and "101" in out
+    assert "BTC scalp" in out
+    assert "+1.00 USDT" in out and "(+2.50%)" in out          # total PnL with unit + percent
+    assert "Realized +1.50" in out and "Unrealized −0.50" in out
+    assert "0.003 BTC @ 100.00" in out                        # position with base coin + entry
+    assert "±1.00%" in out and "99.00 – 101.00" in out        # range as % and bounds
     assert "committed on-chain" in out
+
+
+def test_render_detail_flat_position():
+    d = {"instance_id": "i", "name": "", "market": "ETHUSDT", "state": "RUNNING",
+         "total_pnl": "0", "pnl_pct": "0", "realized_pnl": "0", "unrealized_pnl": "0",
+         "position": "0", "fill_count": 0, "lower": "99", "upper": "101", "levels": 10,
+         "order_size": "0.01", "leverage": "1"}
+    out = commands.render_detail(d)
+    assert "flat" in out and "🟢" in out
 
 
 async def test_detail_returns_text_and_data():

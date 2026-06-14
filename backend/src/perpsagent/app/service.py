@@ -252,12 +252,28 @@ class AppService:
             return None
         cfg = eng.cfg
         names = await self._grid_names(user_id)
+        realized, pos_qty, pos_avg = eng.realized, eng.pos_qty, eng.pos_avg
+        try:  # live mark for unrealized PnL; fall back to entry / range mid
+            bid, ask = await session.exchange.best_bid_ask(cfg.market)
+            mark = (bid + ask) / 2
+        except Exception:  # noqa: BLE001
+            mark = pos_avg if pos_avg > 0 else (cfg.lower + cfg.upper) / 2
+        unrealized = (mark - pos_avg) * pos_qty if pos_qty != 0 else Decimal(0)
+        total = realized + unrealized
+        lev = cfg.leverage if cfg.leverage > 0 else Decimal(1)
+        notional = cfg.order_size * cfg.levels * mark      # all levels resting at mark
+        margin = notional / lev                            # user capital the grid commits
+        pnl_pct = (total / margin * 100) if margin else Decimal(0)
         return {
             "instance_id": instance_id, "name": names.get(instance_id, ""),
             "market": cfg.market, "state": eng.state.value,
-            "realized_pnl": str(eng.realized), "fill_count": eng.fill_count,
+            "realized_pnl": str(realized), "unrealized_pnl": str(unrealized),
+            "total_pnl": str(total), "pnl_pct": str(round(pnl_pct, 2)),
+            "position": str(pos_qty), "avg_entry": str(pos_avg) if pos_qty != 0 else "",
+            "mark": str(mark), "fill_count": eng.fill_count,
             "lower": str(cfg.lower), "upper": str(cfg.upper), "levels": cfg.levels,
             "order_size": str(cfg.order_size), "leverage": str(cfg.leverage),
+            "margin": str(round(margin, 2)), "notional": str(round(notional, 2)),
             "bias": cfg.bias, "proofs": dict(self._proofs.get(instance_id, {})),
         }
 

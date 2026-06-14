@@ -233,21 +233,57 @@ def render_history(rows: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _signed(s) -> str:
+    """Money with an explicit sign + thousands, 2dp: +12.34 / −1.20."""
+    v = Decimal(str(s))
+    return f"{'+' if v >= 0 else '−'}{abs(v):,.2f}"
+
+
+def _base_of(market: str) -> str:
+    """BTCUSDT -> BTC (the coin a position is denominated in)."""
+    for q in ("USDT", "USDC", "USD"):
+        if market.endswith(q):
+            return market[: -len(q)]
+    return market
+
+
 def render_detail(d: dict) -> str:
-    """Full single-grid view: config, live PnL, and on-chain proofs."""
+    """Full single-grid view: headline PnL (USDT + %), position, setup, proofs."""
     icon = _STATE_ICON.get(d.get("state"), "•")
     name = d.get("name") or d["instance_id"]
-    lines = [f"📈 <b>{name}</b>  {icon} {d.get('state')}",
-             f"<code>{d['instance_id']}</code>",
-             f"{d.get('market', '?')} · range {d.get('lower', '?')} – {d.get('upper', '?')}",
-             f"steps {d.get('levels', '?')} · size {d.get('order_size', '?')} · lev x{d.get('leverage', '?')}",
-             f"PnL <b>{d.get('realized_pnl', '0')}</b> · fills {d.get('fill_count', 0)}"]
-    proofs = d.get("proofs", {})
-    for kind, lbl in (("commit", "⛓ committed on-chain"), ("attest", "⛓ attested on-chain"),
-                      ("fee", "💸 builder fee on-chain")):
-        ln = _proof_line(proofs, kind, lbl)
-        if ln:
-            lines.append(ln.lstrip("\n"))
+    total = d.get("total_pnl", d.get("realized_pnl", "0"))
+    tone = "🟢" if Decimal(str(total)) >= 0 else "🔴"
+    lines = [
+        f"📈 <b>{name}</b>  {icon} {d.get('state')}",
+        f"<code>{d['instance_id']}</code>",
+        "",
+        f"{tone} <b>{_signed(total)} USDT</b>  ({_signed(d.get('pnl_pct', 0))}%)",
+        f"     Realized {_signed(d.get('realized_pnl', 0))} · "
+        f"Unrealized {_signed(d.get('unrealized_pnl', 0))} USDT",
+    ]
+    pos = Decimal(str(d.get("position", "0") or "0"))
+    if pos != 0:
+        lines.append(f"     Position {_num(abs(pos))} {_base_of(d.get('market', ''))} "
+                     f"@ {_q2(d.get('avg_entry', 0))}")
+    else:
+        lines.append("     Position flat — waiting for fills")
+    lines.append(f"     Fills {d.get('fill_count', 0)}")
+    lines.append("\n⚙️ <b>Setup</b>")
+    lower, upper = d.get("lower"), d.get("upper")
+    if lower and upper:
+        mid = (Decimal(str(lower)) + Decimal(str(upper))) / 2
+        bpct = ((Decimal(str(upper)) - Decimal(str(lower))) / 2 / mid * 100) if mid else Decimal(0)
+        lines.append(f"     Range ±{bpct:.2f}%  ({_q2(lower)} – {_q2(upper)})")
+    lines.append(f"     {d.get('levels', '?')} steps · size {_num(d.get('order_size', '0'))} · "
+                 f"lev x{_num(d.get('leverage', '1'))}")
+    if d.get("margin"):
+        lines.append(f"     Margin ~{_q2(d['margin'])} · notional ~{_q2(d.get('notional', 0))} USDT")
+    proof_lines = [ln.lstrip("\n") for kind, lbl in (
+        ("commit", "⛓ committed on-chain"), ("attest", "⛓ attested on-chain"),
+        ("fee", "💸 builder fee on-chain")) if (ln := _proof_line(d.get("proofs", {}), kind, lbl))]
+    if proof_lines:
+        lines.append("")
+        lines += proof_lines
     return "\n".join(lines)
 
 

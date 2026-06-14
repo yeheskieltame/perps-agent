@@ -18,7 +18,7 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand, CallbackQuery, Message
+from aiogram.types import BotCommand, CallbackQuery, ForceReply, Message
 
 from . import commands
 from .api import WorkerAPI
@@ -65,6 +65,12 @@ class Connect(StatesGroup):
     key = State()
     secret = State()
     env = State()
+
+
+class Configure(StatesGroup):
+    """A single custom config value: tap ✏️ Custom → reply with the value."""
+
+    value = State()
 
 
 class Allowlist(BaseMiddleware):
@@ -378,10 +384,34 @@ async def cb_setting_set(cb: CallbackQuery, api: WorkerAPI, callback_data: SetCB
 
 
 @router.callback_query(SetCB.filter(F.kind == "custom"))
-async def cb_setting_custom(cb: CallbackQuery, callback_data: SetCB) -> None:
+async def cb_setting_custom(cb: CallbackQuery, state: FSMContext, callback_data: SetCB) -> None:
+    """No alert, no command to memorize: ask for the value and capture the reply."""
     key = callback_data.key
-    await cb.answer(f"To type a custom value:\n/set {key} VALUE\ne.g.  /set {key} 0.5",
-                    show_alert=True)
+    label = KNOB_LABEL.get(key, key)
+    await cb.answer()
+    await state.set_state(Configure.value)
+    await state.update_data(config_key=key)
+    if isinstance(cb.message, Message):
+        await cb.message.answer(
+            f"✏️ Send the new value for <b>{label}</b> (just the number, e.g. <code>0.5</code>).\n"
+            f"/cancel to abort.",
+            reply_markup=ForceReply(input_field_placeholder=f"new {label} value"))
+
+
+@router.message(Configure.value)
+async def on_config_value(m: Message, api: WorkerAPI, state: FSMContext) -> None:
+    key = (await state.get_data()).get("config_key")
+    if not key:
+        await state.clear()
+        return
+    label = KNOB_LABEL.get(key, key)
+    toast, new = await commands.set_setting(api, _uid(m), key, (m.text or "").strip())
+    if new is None:  # validation failed — stay in the state and re-ask
+        await m.answer(f"{toast}\nTry again, or /cancel.",
+                       reply_markup=ForceReply(input_field_placeholder=f"new {label} value"))
+        return
+    await state.clear()
+    await m.answer(f"✅ {label} set.\n\n" + commands.settings_card(new), reply_markup=config_kb(new))
 
 
 # ── price picker ─────────────────────────────────────────────────────────────

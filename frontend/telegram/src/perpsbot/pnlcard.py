@@ -54,13 +54,13 @@ def render(data: dict) -> bytes:
 
     im = Image.open(_TEMPLATE).convert("RGB")
     d = ImageDraw.Draw(im)
-    d.text((_X, 196), "   ·   ".join(parts), font=_font(_BOLD, 48), fill=_WHITE)
-    d.text((_X, 284), f"{_signed(pct)}%", font=_font(_BOLD, 170), fill=color)
-    d.text((_X, 520), f"{_signed(pnl)} {data.get('currency', 'USDT')}", font=_font(_BOLD, 80), fill=color)
-    y = 652
+    d.text((_X, 232), "   ·   ".join(parts), font=_font(_BOLD, 40), fill=_WHITE)
+    d.text((_X, 308), f"{_signed(pct)}%", font=_font(_BOLD, 124), fill=color)
+    d.text((_X, 470), f"{_signed(pnl)} {data.get('currency', 'USDT')}", font=_font(_BOLD, 58), fill=color)
+    y = 588
     for line in (data.get("lines") or [])[:2]:
-        d.text((_X, y), str(line), font=_font(_REG, 42), fill=_GREY)
-        y += 64
+        d.text((_X, y), str(line), font=_font(_REG, 36), fill=_GREY)
+        y += 54
 
     buf = BytesIO()
     im.save(buf, format="PNG")

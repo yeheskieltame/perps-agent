@@ -355,7 +355,7 @@ def _q2(s) -> str:
 
 
 def _num(s) -> str:
-    return str(Decimal(str(s)).normalize())
+    return f"{Decimal(str(s)).normalize():f}"   # plain decimal — '20'/'250', not '2E+1'
 
 
 def render_template_preview(plan: dict, template: str) -> str:
@@ -627,6 +627,31 @@ async def close_position(api, user_id: int, market: str) -> str:
     except ApiError as e:
         return _err(e)
     return f"❌ Closed your {market} position."
+
+
+async def close_with_card(api, user_id: int, market: str) -> tuple[str, dict | None]:
+    """Snapshot the position's live PnL, then close it — so the caller can render a
+    shareable PnL card. Returns (note, card_data | None if there was no position)."""
+    card = None
+    try:
+        for p in await api.positions(user_id):
+            if p.get("market") == market:
+                card = {"symbol": market, "side": p.get("side", ""), "qty": p.get("size", "0"),
+                        "base": _base_of(market), "entry": p.get("entry", "0"),
+                        "exit": p.get("mark", "0"), "pnl": p.get("pnl", "0"),
+                        "pnl_pct": p.get("pnl_pct", "0"), "currency": "USDT"}
+                break
+    except ApiError:
+        pass
+    return await close_position(api, user_id, market), card
+
+
+def pnl_caption(card: dict) -> str:
+    """One-line caption under the PnL card."""
+    tone = "🟢" if Decimal(str(card.get("pnl", "0"))) >= 0 else "🔴"
+    return (f"{tone} <b>{card.get('symbol')} {card.get('side')}</b> closed\n"
+            f"PnL <b>{_signed(card.get('pnl', 0))} {card.get('currency', 'USDT')}</b> "
+            f"({_signed(card.get('pnl_pct', 0))}%) · {_num(card.get('qty', 0))} {card.get('base', '')}")
 
 
 async def close_all_positions(api, user_id: int) -> str:

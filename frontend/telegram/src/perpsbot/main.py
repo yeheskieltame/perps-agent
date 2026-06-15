@@ -18,9 +18,9 @@ from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand, CallbackQuery, ForceReply, Message
+from aiogram.types import BotCommand, BufferedInputFile, CallbackQuery, ForceReply, Message
 
-from . import commands
+from . import commands, pnlcard
 from .api import WorkerAPI
 from .config import BotSettings, is_allowed
 from .keyboards import (
@@ -453,8 +453,13 @@ async def cb_pos_close_ask(cb: CallbackQuery, callback_data: PosCB) -> None:
 
 @router.callback_query(PosCB.filter(F.action == "close_do"))
 async def cb_pos_close_do(cb: CallbackQuery, api: WorkerAPI, callback_data: PosCB) -> None:
-    note = await commands.close_position(api, _uid(cb), callback_data.market)
+    note, card = await commands.close_with_card(api, _uid(cb), callback_data.market)
     await cb.answer(note[:180])
+    if card is not None and isinstance(cb.message, Message):
+        with contextlib.suppress(Exception):    # a card must never block the close
+            await cb.message.answer_photo(
+                BufferedInputFile(pnlcard.render(card), filename="pnl.png"),
+                caption=commands.pnl_caption(card))
     text, rows = await commands.positions(api, _uid(cb))
     await _edit(cb, text, positions_kb(rows) if rows is not None else back_kb("positions"))
 

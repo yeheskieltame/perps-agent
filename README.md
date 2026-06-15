@@ -13,6 +13,8 @@
   &nbsp;|&nbsp;
   <a href="https://youtu.be/0Vubbfn32_c"><b>Demo</b></a>
   &nbsp;|&nbsp;
+  <a href="https://docs.google.com/presentation/d/1aGbb-JPlc4B1iTZ4cBTffXJDkangvEEqT0zNALIa0bE/edit?usp=sharing"><b>Pitch deck</b></a>
+  &nbsp;|&nbsp;
   <a href="https://x.com/perpsagent"><b>X</b></a>
 </p>
 
@@ -166,6 +168,7 @@ Built by Team PerpsAgent.
 - Website and waitlist: [perpsagent.xyz](https://perpsagent.xyz)
 - Documentation: [docs.perpsagent.xyz](https://docs.perpsagent.xyz)
 - Demo video: [youtu.be/0Vubbfn32_c](https://youtu.be/0Vubbfn32_c)
+- Pitch deck: [Google Slides](https://docs.google.com/presentation/d/1aGbb-JPlc4B1iTZ4cBTffXJDkangvEEqT0zNALIa0bE/edit?usp=sharing)
 - X: [@perpsagent](https://x.com/perpsagent)
 
 Track: Mantle AI Awakening, AI Trading and Strategy, BGA.

@@ -12,6 +12,7 @@ from decimal import Decimal
 from typing import Callable, Protocol, Sequence
 
 from ..agent.learn import to_record
+from ..agent.decide import ContextualPolicy
 from ..agent.sense import classify_regime
 from ..domain.models import BalanceView, GridConfig, RegimeFingerprint
 from .session import UserSession
@@ -90,6 +91,7 @@ class AppService:
         self._signals = signals or []
         self._regimes: dict[str, RegimeFingerprint] = {}  # instance_id -> regime at commit
         self._proofs: dict[str, dict] = {}  # instance_id -> {commit, attest, memory, fee} tx hashes
+        self._decisions: dict[str, dict] = {}  # instance_id -> {bias, trend, range_position}
         # Builder fee (monetization): flat on-chain settlement per closed episode,
         # from the operator's bond to the treasury. 0 = off.
         self._builder_fee = int(builder_fee)
@@ -105,22 +107,51 @@ class AppService:
 
     async def create_grid(self, user_id: int, cfg: GridConfig, *, breaker=None,
                           monitor_interval: float = 0.0, profit_guard=None,
-                          account_guard=None, timeframe: str = "1") -> str:
+                          account_guard=None, timeframe: str = "1", bias_mode: str = "auto") -> str:
         session = await self._session(user_id)
-        # SENSE the regime, then COMMIT the config hash on-chain BEFORE any order
-        # rests. Commit-before-trade is what makes the record trustless (params can't
-        # be fitted to results). If the chain is configured, a failed commit aborts
-        # the launch — we never trade an uncommitted strategy.
-        if self._chain is not None:
+        # SENSE the regime — the agent's brain now runs on the PRODUCT path, not only
+        # the CLI (agent/loop.py). The regime sets the grid's bias so it leans WITH a
+        # trend instead of fighting it; with `bias_mode` auto, the structure veto also
+        # demotes a with-trend lean that would enter at range exhaustion (decide.py).
+        try:
             regime = await classify_regime(session.exchange, cfg.market, self._signals,
                                            timeframe=timeframe)
+        except Exception as e:  # noqa: BLE001 — a sensing hiccup must never block a launch
+            print(f"  ! sense failed ({cfg.instance_id}): {e} — launching neutral")
+            regime = None
+        policy = ContextualPolicy(bias_mode=bias_mode)
+        trend = regime.trend_strength if regime is not None else 0.0
+        rng = regime.range_position if regime is not None else 0.5
+        cfg.bias = policy.bias_for(trend, prev_bias=cfg.bias, range_position=rng)
+        self._decisions[cfg.instance_id] = {"bias": cfg.bias, "trend": trend,
+                                            "range_position": rng, "mode": bias_mode}
+        # COMMIT the config hash on-chain BEFORE any order rests — trustless record
+        # (params can't be fitted to results). A failed commit aborts the launch.
+        if self._chain is not None:
             commit_tx = await self._chain.commit_strategy(cfg.instance_id, cfg)
-            self._regimes[cfg.instance_id] = regime
+            if regime is not None:
+                self._regimes[cfg.instance_id] = regime
             self._proofs[cfg.instance_id] = {"commit": commit_tx}
+
+        async def bias_fn(current: int) -> int:
+            """Re-read the regime each re-center so the grid MORPHS ranging↔trend
+            mid-episode instead of staying neutral against a runaway move."""
+            try:
+                live = await classify_regime(session.exchange, cfg.market, self._signals,
+                                             timeframe=timeframe)
+                return policy.bias_for(live.trend_strength, prev_bias=current,
+                                       range_position=live.range_position)
+            except Exception:  # noqa: BLE001 — a failed read keeps the current bias
+                return current
+
         await session.create(cfg, breaker=breaker, monitor_interval=monitor_interval,
                              profit_guard=profit_guard, account_guard=account_guard,
-                             timeframe=timeframe)
+                             timeframe=timeframe, bias_fn=bias_fn)
         return cfg.instance_id
+
+    def decision(self, instance_id: str) -> dict:
+        """The launch decision (bias / sensed trend) for the UI to surface."""
+        return dict(self._decisions.get(instance_id, {}))
 
     def proofs(self, instance_id: str) -> dict:
         """On-chain tx hashes for an instance: {commit, attest, memory} (subset)."""

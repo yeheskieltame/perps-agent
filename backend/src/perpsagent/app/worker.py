@@ -170,12 +170,20 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
                     center = max(mid * (1 - band), min(mid * (1 + band), sma))
             body["lower"], body["upper"] = str(center * (1 - band)), str(center * (1 + band))
         cfg = _cfg_from_body(body, node, knobs)
+        # Auto loss-cap (backstop): if the user set no per-grid drawdown, stop the grid
+        # at ~60% of its committed margin so a runaway one-sided fill can't bleed to
+        # liquidation. The agent's bias should prevent ever getting here.
+        if Decimal(knobs.get("max_drawdown", "0")) <= 0:
+            grid_mid = (cfg.lower + cfg.upper) / 2
+            lev = cfg.leverage if cfg.leverage > 0 else Decimal(1)
+            margin_est = cfg.order_size * cfg.levels * grid_mid / lev
+            knobs["max_drawdown"] = str((margin_est * Decimal("0.6")).quantize(Decimal("0.01")))
         breaker, profit_guard, account_guard = prefs.build_guards(knobs)
         try:
             iid = await service.create_grid(
                 user_id, cfg, breaker=breaker, profit_guard=profit_guard,
                 account_guard=account_guard, timeframe=prefs.timeframe_code(knobs),
-                monitor_interval=prefs.monitor_interval(knobs),
+                monitor_interval=prefs.monitor_interval(knobs), bias_mode=knobs["bias"],
             )
         except KeyError:
             raise web.HTTPUnauthorized(reason=_NO_CREDS) from None
@@ -183,7 +191,7 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
             raise web.HTTPConflict(reason=str(e)) from None
         return web.json_response({"instance_id": iid, "effective": knobs,
                                   "lower": str(cfg.lower), "upper": str(cfg.upper),
-                                  "proofs": service.proofs(iid)})
+                                  "proofs": service.proofs(iid), "decision": service.decision(iid)})
 
     async def get_settings(request: web.Request) -> web.Response:
         user_id = _user_id(request)

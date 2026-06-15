@@ -382,6 +382,13 @@ async def test_create_template_result_points_unconnected_users_to_connect():
     assert iid is None and "/connect" in text
 
 
+def test_bias_note_surfaces_auto_decision_and_pinned_choice():
+    auto = commands._bias_note({"bias": 1, "mode": "auto", "trend": 0.72})
+    assert "Agent" in auto and "LONG" in auto and "+0.72" in auto
+    assert "you set it" in commands._bias_note({"bias": -1, "mode": "short"})
+    assert commands._bias_note(None) == "" and commands._bias_note({}) == ""
+
+
 def test_render_positions_empty_and_short_with_profit():
     assert "No open positions" in commands.render_positions([])
     rows = [{"market": "BTCUSDT", "side": "SHORT", "size": "0.00015", "entry": "72712",

@@ -132,7 +132,7 @@ SETTING_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ("Exit", [("tp", "bank when PnL ≥ this, quote · 0 = off"),
               ("trail", "give-back fraction of peak · 0 = off"),
               ("trail_arm", "peak needed before trail arms")]),
-    ("Behavior", [("bias", "long / short / neutral"),
+    ("Behavior", [("bias", "auto (agent decides) / long / short / neutral"),
                   ("timeframe", "1m 5m 15m 1h 4h 1d"),
                   ("recenter", "supervisor cadence, s · auto = bar/4")]),
 ]
@@ -369,6 +369,20 @@ def render_template_preview(plan: dict, template: str) -> str:
             f"Tap ✅ Launch — records the setup on-chain, then starts.")
 
 
+def _bias_note(decision: dict | None) -> str:
+    """Surface the agent's launch read — the AI-decided bias / sensed trend."""
+    if not decision:
+        return ""
+    label = {1: "LONG 📈", -1: "SHORT 📉", 0: "NEUTRAL ⚖️"}.get(decision.get("bias", 0), "NEUTRAL ⚖️")
+    if decision.get("mode") != "auto":
+        return f"\n🎚 Bias: <b>{label}</b> (you set it)"
+    try:
+        trend = float(decision.get("trend", 0))
+    except (TypeError, ValueError):
+        trend = 0.0
+    return f"\n🤖 Agent sensed the regime → bias <b>{label}</b> (trend {trend:+.2f})"
+
+
 async def create_template_result(api, user_id: int, market: str, template: str,
                                  margin: str | None = None,
                                  margin_pct: str | None = None) -> tuple[str, str | None]:
@@ -384,7 +398,8 @@ async def create_template_result(api, user_id: int, market: str, template: str,
     text = (f"✅ <b>Grid launched</b> · {_STRATEGY_LABEL.get(template, '')}\n<code>{iid}</code>\n"
             f"{market.upper()} [{resp.get('lower', '?')}, {resp.get('upper', '?')}] · "
             f"{eff.get('levels', '?')} levels · size {eff.get('size', '?')} · lev x{eff.get('leverage', '?')}"
-            + _proof_line(resp.get("proofs"), "commit", "⛓ committed on-chain"))
+            + _proof_line(resp.get("proofs"), "commit", "⛓ committed on-chain")
+            + _bias_note(resp.get("decision")))
     return text, iid
 
 
@@ -400,7 +415,8 @@ async def create_grid_result(api, user_id: int, market: str) -> tuple[str, str |
             f"{market.upper()} [{resp.get('lower', '?')}, {resp.get('upper', '?')}] · "
             f"{eff.get('levels', '?')} levels · {eff.get('size', '?')}/level · "
             f"lev x{eff.get('leverage', '?')}"
-            + _proof_line(resp.get("proofs"), "commit", "⛓ committed on-chain"))
+            + _proof_line(resp.get("proofs"), "commit", "⛓ committed on-chain")
+            + _bias_note(resp.get("decision")))
     return text, iid
 
 
@@ -414,7 +430,8 @@ async def launch_note(api, user_id: int, market: str) -> str:
     return (f"✅ Launched <code>{resp['instance_id']}</code> — "
             f"{eff.get('levels', '?')} levels · lev {eff.get('leverage', '?')}x · "
             f"[{resp.get('lower', '?')}, {resp.get('upper', '?')}]"
-            + _proof_line(resp.get("proofs"), "commit", "⛓ committed on-chain"))
+            + _proof_line(resp.get("proofs"), "commit", "⛓ committed on-chain")
+            + _bias_note(resp.get("decision")))
 
 
 async def stop_note(api, user_id: int, instance_id: str) -> str:

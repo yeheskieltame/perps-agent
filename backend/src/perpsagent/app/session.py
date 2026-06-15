@@ -29,11 +29,12 @@ class UserSession:
         self._router: asyncio.Task | None = None
 
     async def create(self, cfg: GridConfig, *, breaker=None, monitor_interval: float = 0.0,
-                     profit_guard=None, account_guard=None, timeframe: str = "1") -> GridEngine:
+                     profit_guard=None, account_guard=None, timeframe: str = "1",
+                     bias_fn=None) -> GridEngine:
         engine = await self.manager.create(
             self.exchange, cfg, self.store, breaker=breaker,
             monitor_interval=monitor_interval, profit_guard=profit_guard, consume=False,
-            account_guard=account_guard, timeframe=timeframe,
+            account_guard=account_guard, timeframe=timeframe, bias_fn=bias_fn,
         )
         if self.store is not None and hasattr(self.store, "set_owner"):
             await self.store.set_owner(cfg.instance_id, self.user_id)  # durable ownership

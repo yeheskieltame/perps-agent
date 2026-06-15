@@ -290,8 +290,9 @@ KNOB_HELP = {
              "<b>0 = off</b>; <code>0.3</code> = give back 30% of the peak.",
     "trail_arm": "Profit (<b>USDT</b>) the grid must reach before trailing turns on. "
                  "<b>0</b> = arm immediately.",
-    "bias": "Which way to lean. <b>Neutral</b> = both ways; <b>Long</b> = favor buys; "
-            "<b>Short</b> = favor sells.",
+    "bias": "Which way the grid leans. <b>Auto</b> = the agent reads the trend and "
+            "leans with it (so it won't fight a rally); <b>Neutral</b> = both ways; "
+            "<b>Long</b> favors buys; <b>Short</b> favors sells.",
     "timeframe": "The candle size the bot reads market structure on. <b>1m</b> = fast/scalpy, "
                  "<b>1h–4h</b> = calmer.",
     "recenter": "How often the bot re-centers the grid around the price. <b>Auto</b> = "
@@ -304,7 +305,7 @@ KNOB_PRESETS: dict[str, list[tuple[str, str]]] = {
     "size": [("0.001", "0.001"), ("0.005", "0.005"), ("0.01", "0.01"), ("0.05", "0.05")],
     "anchor": [("🧠 Smart (recent avg)", "mean"), ("Current price", "now")],
     "leverage": [("x1", "1"), ("x5", "5"), ("x10", "10"), ("x15", "15"), ("x20", "20"), ("x25", "25")],
-    "bias": [("Neutral", "neutral"), ("Long", "long"), ("Short", "short")],
+    "bias": [("🤖 Auto", "auto"), ("Neutral", "neutral"), ("Long", "long"), ("Short", "short")],
     "timeframe": [("1m", "1m"), ("5m", "5m"), ("15m", "15m"), ("1h", "1h"), ("4h", "4h"), ("1d", "1d")],
     "recenter": [("Auto", "auto"), ("15s", "15"), ("30s", "30"), ("60s", "60")],
     "max_inventory": [("Auto", "0")],

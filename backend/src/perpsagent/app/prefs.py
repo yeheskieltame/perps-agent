@@ -23,7 +23,7 @@ TF_ALIAS = {"1m": "1", "3m": "3", "5m": "5", "15m": "15", "30m": "30",
             "1h": "60", "2h": "120", "4h": "240", "6h": "360", "12h": "720", "1d": "D"}
 _TF_CODES = set(TF_ALIAS.values())
 
-BIAS_VALUES = {"neutral": 0, "long": 1, "short": -1}
+BIAS_VALUES = {"auto": 0, "neutral": 0, "long": 1, "short": -1}  # auto = agent decides from regime
 
 # key -> (default, validator). Validators normalize to a canonical string or
 # raise ValueError with a user-facing reason.
@@ -67,7 +67,7 @@ def _v_leverage(raw: str) -> str:
 def _v_bias(raw: str) -> str:
     v = str(raw).strip().lower()
     if v not in BIAS_VALUES:
-        raise ValueError(f"bias: choose long, short or neutral (got {raw!r})")
+        raise ValueError(f"bias: choose auto, long, short or neutral (got {raw!r})")
     return v
 
 
@@ -118,7 +118,7 @@ KNOBS: dict[str, tuple[str, object]] = {
     "trail": ("0", _v_trail),
     "trail_arm": ("0", _v_quote("trail_arm")),
     # behavior
-    "bias": ("neutral", _v_bias),
+    "bias": ("auto", _v_bias),               # auto = agent biases from the sensed regime
     "timeframe": ("1m", _v_timeframe),
     "recenter": ("auto", _v_recenter),       # supervisor cadence; auto = bar/4
 }
@@ -219,11 +219,13 @@ def monitor_interval(s: dict) -> float:
 
 
 def build_guards(s: dict) -> tuple[CircuitBreaker, ProfitGuard, AccountGuard | None]:
-    # 0 = auto inventory cap: 3x nominal one-sided inventory (same rule as the
-    # agent loop, which the worker path bypasses).
+    # 0 = auto inventory cap: ONE full one-side ladder (size × levels). A trend that
+    # fills one side over and over can't accumulate past a single ladder — roughly the
+    # committed margin for a balance-sized grid — before the breaker flattens. (The old
+    # 3× let a runaway short reach ~liquidation; live incident 2026-06-15.)
     inv = Decimal(s["max_inventory"])
     if inv <= 0:
-        inv = Decimal(s["size"]) * int(s["levels"]) * 3
+        inv = Decimal(s["size"]) * int(s["levels"])
     breaker = CircuitBreaker(max_inventory=inv, max_drawdown=Decimal(s["max_drawdown"]))
     profit = ProfitGuard(take_profit=Decimal(s["tp"]), trail_frac=Decimal(s["trail"]),
                          trail_arm=Decimal(s["trail_arm"]))

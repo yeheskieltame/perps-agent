@@ -146,6 +146,46 @@ async def test_center_now_stays_symmetric_on_the_live_price():
 
 
 @pytest.mark.asyncio
+async def test_auto_bias_goes_long_with_a_strong_uptrend_and_caps_loss():
+    # The agent's brain on the PRODUCT path: a steep uptrend → grid biases LONG
+    # (buys dips / banks the rises) instead of shorting into the rally. The worker
+    # also auto-fills a per-grid loss cap (the backstop that was missing).
+    up = [str(100 + i * 0.4) for i in range(200)]
+    ex = FakeExchange({"mid": up[-1], "equity": "100000", "closes": up})
+    svc = AppService(client_factory=lambda _u: ex)
+    c = await _client(build_worker_app(svc, "0"))
+    try:
+        r = await c.post("/v1/grids", headers={"X-User-Id": "7"},
+                         json={"market": "BTCUSDT", "settings": {"band": "1", "levels": "10",
+                               "size": "0.01", "bias": "auto"}})
+        assert r.status == 200
+        b = await r.json()
+        assert b["decision"]["mode"] == "auto" and b["decision"]["bias"] == 1
+        assert Decimal(b["effective"]["max_drawdown"]) > 0          # auto loss-cap backstop
+    finally:
+        await c.close()
+
+
+@pytest.mark.asyncio
+async def test_auto_neutral_when_ranging_and_pinned_bias_respected():
+    flat = ["100"] * 200
+    ex = FakeExchange({"mid": "100", "equity": "100000", "closes": flat})
+    svc = AppService(client_factory=lambda _u: ex)
+    c = await _client(build_worker_app(svc, "0"))
+    try:
+        r = await c.post("/v1/grids", headers={"X-User-Id": "7"},
+                         json={"market": "BTCUSDT", "settings": {"band": "1", "levels": "10",
+                               "size": "0.01", "bias": "auto"}})
+        assert (await r.json())["decision"]["bias"] == 0            # ranging → neutral
+        r2 = await c.post("/v1/grids", headers={"X-User-Id": "8"},
+                          json={"market": "BTCUSDT", "settings": {"band": "1", "levels": "10",
+                                "size": "0.01", "bias": "short"}})
+        assert (await r2.json())["decision"]["bias"] == -1          # pinned short respected
+    finally:
+        await c.close()
+
+
+@pytest.mark.asyncio
 async def test_worker_rejects_unknown_template():
     svc = AppService(client_factory=lambda _u: FakeExchange({"mid": "100", "equity": "10000"}))
     c = await _client(build_worker_app(svc, "0"))

@@ -77,7 +77,7 @@ def test_build_guards_auto_inventory_and_profit():
     s = prefs.merged({"size": "0.01", "levels": "10", "tp": "0.5", "trail": "0.3",
                       "trail_arm": "0.2", "account_dd": "5"})
     breaker, profit, account = prefs.build_guards(s)
-    assert breaker.max_inventory == Decimal("0.3")  # 0 = auto: size * levels * 3
+    assert breaker.max_inventory == Decimal("0.10")  # 0 = auto: one full ladder (size * levels)
     assert profit.take_profit == Decimal("0.5") and profit.trail_frac == Decimal("0.3")
     assert account is not None and account.max_drop == Decimal("5")
     b2, _, a2 = prefs.build_guards(prefs.merged({"max_inventory": "7"}))

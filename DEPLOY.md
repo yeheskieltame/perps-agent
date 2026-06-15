@@ -63,12 +63,12 @@ docker compose down                             # stop (-v also wipes data)
 
 Without a DSN, the store falls back to SQLite (`PERPSAGENT_STORE_DB_PATH`) and the
 PG integration tests skip. Set `PERPSAGENT_CRED_MASTER_KEY` (a Fernet key) to seal
-per-user venue keys — never commit/log it.
+per-user venue keys, never commit/log it.
 
 ### Sharded deploy (workers + gateway)
 
 Horizontal scale = N worker processes (one shard each) behind one stateless gateway
-that routes by `user_id` (consistent hashing — `plan/SCALING.md` #10). Each worker
+that routes by `user_id` (consistent hashing, `plan/SCALING.md` #10). Each worker
 owns its users' sessions/streams/clients; the gateway holds no state.
 
 ```bash
@@ -86,7 +86,7 @@ PERPSAGENT_SHARD_COUNT=2 PERPSAGENT_GATEWAY_PORT=8080 \
 
 Clients call the gateway with an `X-User-Id` header; it forwards to the owning
 worker. The gateway is unauthenticated by design (terminate auth at your ingress),
-and grids run through the `GridService` facade — the verifiable LearningLoop is wired
+and grids run through the `GridService` facade, the verifiable LearningLoop is wired
 per user on launch/stop.
 
 Live: copy `.env.example` → `.env`, fill Bybit testnet keys + Mantle RPC/key + the
@@ -108,3 +108,7 @@ deploy.
 - Testnet always unless `PERPSAGENT_ENV=mainnet`; runner refuses env↔RPC mismatch.
 - Non-custodial: Bybit keys are the user's; the Vault never bridges to the CEX.
 - Commit on-chain before trading; attest the verified outcome after.
+
+---
+
+Part of [Perps Agent](https://perpsagent.xyz). Full documentation: [docs.perpsagent.xyz](https://docs.perpsagent.xyz).

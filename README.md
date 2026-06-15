@@ -1,164 +1,174 @@
-# Perps Agent
+<p align="center">
+  <img src="perps-agent-hero.png" alt="Perps Agent" width="900">
+</p>
 
-**A verifiable, self-improving AI grid-trading agent — run it from Telegram.**
-It executes on the venue (live on **Bybit**); it senses, learns, and **proves its
-track record on Mantle**. Don't trust, verify — every result is an on-chain record.
+<p align="center">
+  <b>A verifiable, self-improving grid trading agent. Live on Bybit, run from Telegram, proven on Mantle.</b>
+</p>
 
-🌐 **[perpsagent.xyz](https://perpsagent.xyz) — waitlist open** · 𝕏 [@perpsagent](https://x.com/perpsagent)
-
-> A real product, in active development. Born at the Mantle **AI Awakening** hackathon
-> (AI · Trading & Strategy / BGA), now building toward multi-venue launch.
+<p align="center">
+  <a href="https://perpsagent.xyz"><b>Website</b></a>
+  &nbsp;|&nbsp;
+  <a href="https://docs.perpsagent.xyz"><b>Docs</b></a>
+  &nbsp;|&nbsp;
+  <a href="https://youtu.be/0Vubbfn32_c"><b>Demo</b></a>
+  &nbsp;|&nbsp;
+  <a href="https://x.com/perpsagent"><b>X</b></a>
+</p>
 
 ---
 
-## Why Perps Agent
+Perps Agent is a real product in active development, not a hackathon demo. It is live on Bybit today, its smart contracts are deployed on Mantle, and its waitlist is open at [perpsagent.xyz](https://perpsagent.xyz).
 
-CEX trading bots are black boxes: their track records are unverifiable and they throw
-away their own decision history. Perps Agent flips that.
+## The problem
 
-- **🔍 Verifiable, not promised.** Every episode commits its strategy *before* trading
-  and attests the *verified outcome* after, on Mantle. A trustless, public track record
-  anyone can recompute — params can't be fitted to results after the fact.
-- **🧠 Self-improving.** That same on-chain history is the agent's memory: it recalls the
-  best-performing parameters for the current market regime, across its own runs *and* the
-  public population. It gets better in the open.
-- **📡 AI-fused signals.** Each launch reads a live regime fingerprint — volatility &
-  microstructure, smart-money flows, and social momentum — before sizing a single order.
-- **🔑 Non-custodial.** Your venue API keys, your account. Capital never leaves the
-  exchange; the on-chain Vault never bridges to it.
-- **📱 A product, not a script.** A polished Telegram app: one-screen dashboard, one-tap
-  strategies, live positions, and on-chain proofs you can tap.
+Every CEX trading bot is a black box.
 
-## The product (Telegram)
+Track records are screenshots, not proof. Parameters get quietly tuned to fit past results, and the bot throws away the decision history that produced them. A user staring at "+300% backtest" has no way to tell a real edge from a lucky seed, and no way to verify anything once money is on the line.
 
-| | |
-|---|---|
-| **One-screen home** | balance, open positions, MNT wallet, and every action as a button |
-| **One-tap strategies** | pick a coin → 🛡 Safe / ⚖️ Balanced / 🔥 Aggressive → choose how much margin → launch. Size is auto-computed from your balance; you preview the exact notional before you commit |
-| **Live Bybit positions** | side · size · entry → mark · unrealized PnL, with one-tap close |
-| **Grid management** | name a grid, open it for detail/edit, pause/stop — each grid independent |
-| **Tap-to-configure** | tune leverage, range, take-profit, trailing, guards by tapping presets — no commands to memorize |
-| **On-chain proofs in chat** | ⛓ commit / attest links to [mantlescan](https://sepolia.mantlescan.xyz) on every launch & close |
+There is also no shared memory. Each bot relearns the same lessons in private, so nothing compounds. The industry sells outcomes it cannot prove and intelligence it cannot accumulate.
 
-## The strategy: adaptive grid
+![The black box problem](submission-assets/d2-problem.png)
 
-A maker-only geometric grid that adapts instead of sitting static:
+## The solution
 
-- **Dynamic re-center** — a supervisor follows price; when it leaves the band the grid is
-  re-laid around the new mid. Inventory-aware: never averages up a long (or down a short).
-- **Circuit breaker** — inventory & drawdown caps; on breach it cancels all and flattens.
-- **Take-profit / trailing-stop** — rides a favorable move, then banks when PnL retraces.
-- **Signed-position accounting** — tracks net long *and* short; guards act on the real position.
+Perps Agent makes the bot prove itself.
 
-Optimization target is **risk-adjusted** performance, never raw PnL.
+It is a maker-only grid trading agent operated entirely from Telegram. Before any trade it commits its exact strategy to Mantle. After the episode closes it attests the verified outcome on chain. What comes out is a public track record anyone can recompute, and an on-chain memory the agent reads back to get better over time.
 
-## The verifiable learning loop
+![What a grid does](submission-assets/00-what-is-grid.png)
+
+What a user actually gets:
+
+- One-tap strategies. Pick a coin, choose Safe, Balanced or Aggressive, set your margin, launch. Size is computed from your balance and previewed before you commit.
+- Live positions and grids. Side, size, entry to mark, unrealized PnL, with one-tap close. Each grid is independent.
+- A shareable PnL card. Every close, and any open position, renders a clean PnL image you can post.
+- Proofs in chat. Every launch and close links to the on-chain commit and attest records.
+- Non-custodial by design. Your Bybit API keys, your account. Capital never leaves the exchange.
+
+![PnL share card](submission-assets/06-pnl.png)
+
+## What makes it different
+
+Three things separate Perps Agent from a normal grid bot.
+
+**Verifiable by commitment.** The strategy hash goes on chain before the first order, so parameters can never be fitted to results after the fact. That is the difference between a claim and a proof.
+
+![The verifiable learning loop](submission-assets/02-loop.png)
+
+**Self-improving memory.** Every closed episode writes its regime, parameters and outcome to an append-only contract. On the next launch the agent recalls the best verified parameters for the current market regime, across its own history and the public population. The same record is both the audit proof and the next training example.
+
+**AI-fused signals.** Before sizing a single order, the agent reads a live regime fingerprint from Elfa for social momentum, Nansen for smart-money flows, and Surf for volatility and microstructure. It never trades blind, and it leans with a trend instead of fighting it.
+
+![AI-fused signals](submission-assets/05-signals.png)
+
+## The strategy: an adaptive grid
+
+The strategy is a maker-only geometric grid that adapts instead of sitting static.
+
+- Regime-aware bias. The agent reads the trend and biases the grid with it, and vetoes a lean that would enter at a range extreme.
+- Dynamic re-center. A supervisor follows price and re-lays the grid around the new mid when price leaves the band.
+- Circuit breaker. Inventory and drawdown caps. On a breach it cancels every order and flattens.
+- Take-profit and trailing stop. It rides a favorable move, then banks the gain when PnL retraces.
+- Signed-position accounting. It tracks net long and short, and the guards act on the real position.
+
+The optimization target is risk-adjusted performance, never raw PnL.
+
+![Adaptive grid strategy](submission-assets/03-grid.png)
+
+## Built like a startup, not a script
+
+The architecture is the moat. The product UI never touches the engine, the adapters, or any exchange SDK. It talks to the backend through a single typed `GridService` facade. Every exchange implements one `ExchangePort` adapter, so adding a venue is one folder, and the engine and agent never change.
+
+This is why expansion is cheap and the codebase scales to many users and many venues without a rewrite.
+
+![On Mantle](submission-assets/04-mantle.png)
+
+The verifiable learning loop, end to end:
 
 ```
-SENSE → RECALL → COMMIT → EXECUTE → ATTEST → LEARN
-  │        │        │         │         │        └─ next RECALL is better
-  │        │        │         │         └─ verified outcome + fills root → Mantle
-  │        │        │         └─ maker-only grid on the venue (Bybit)
-  │        │        └─ config hash on-chain, BEFORE any trade
-  │        └─ best verified params for this regime, from Mantle
-  └─ fuse the regime: vol/funding/microstructure + smart-money + social
+SENSE     fuse the live regime from AI signals and venue candles
+RECALL    pull the best verified params for this regime from Mantle
+COMMIT    write the config hash on chain, before the first order
+EXECUTE   run the maker-only grid on Bybit
+ATTEST    write the verified outcome back to Mantle
+LEARN     the next RECALL starts from a better prior
 ```
-
-| Layer | Role |
-|---|---|
-| **Bybit v5** | primary execution venue — non-custodial, your keys |
-| **Elfa** | real-time social / mention momentum |
-| **Nansen** | smart-money net flows |
-| **Surf** | market microstructure (vol, funding, RSI) |
-| **StrategyLedger** (Mantle) | commit config hash before trading; attest the verified outcome |
-| **StrategyMemory** (Mantle) | append-only `regime → params → outcome`; read back by recall |
-| **Vault** (Mantle) | performance bond + on-chain fee settlement |
 
 ### Live on Mantle Sepolia (chainId 5003)
 
-| Contract | Proxy |
-|---|---|
-| StrategyLedger | [`0x128E925828952803E05157Ee4fEf54ac47cf1C88`](https://sepolia.mantlescan.xyz/address/0x128E925828952803E05157Ee4fEf54ac47cf1C88) |
-| StrategyMemory | [`0xC26E112437e5B6d739232732c665a64eb14Dc519`](https://sepolia.mantlescan.xyz/address/0xC26E112437e5B6d739232732c665a64eb14Dc519) |
-| Vault | [`0x630370DC3a666c9b6816D5C9E8a3757242603eF3`](https://sepolia.mantlescan.xyz/address/0x630370DC3a666c9b6816D5C9E8a3757242603eF3) |
+| Contract | Role | Proxy |
+|---|---|---|
+| StrategyLedger | Commit the config hash before trading, attest the verified outcome after | [`0x128E92...cf1C88`](https://sepolia.mantlescan.xyz/address/0x128E925828952803E05157Ee4fEf54ac47cf1C88) |
+| StrategyMemory | Append-only regime, params and outcome, read back by recall | [`0xC26E11...4Dc519`](https://sepolia.mantlescan.xyz/address/0xC26E112437e5B6d739232732c665a64eb14Dc519) |
+| Vault | Performance bond and on-chain fee settlement in native MNT | [`0x630370...2603eF3`](https://sepolia.mantlescan.xyz/address/0x630370DC3a666c9b6816D5C9E8a3757242603eF3) |
 
-## Monetization
+## Where we are now
 
-Charge for the **system**, not for PnL:
+- Live on Bybit. The full sense, recall, commit, execute, attest and learn loop runs end to end on a real venue. Preflight passes with live equity and live signals.
+- Contracts deployed on Mantle. Ledger, Memory and Vault are live and wired into the backend.
+- Waitlist open. The landing page and public docs are live, and users are signing up at [perpsagent.xyz](https://perpsagent.xyz).
 
-- **Builder fee** — a small fee per closed episode, settled on-chain in native MNT.
-- **x402 alpha API** — pay-per-call access to verified `StrategyMemory` (HTTP 402 →
-  pay → 200), so other agents can buy the brain. No subscription; settles on-chain.
+![Product UI](submission-assets/01-hero.png)
 
-## Roadmap — one engine, every venue
+## How we monetize
 
-Every exchange is one `ExchangePort` adapter; the engine and agent never change. That
-modularity is the roadmap:
+We charge for the system, not for the PnL.
 
-**Live:** Bybit  ·  **Coming soon:** Hyperliquid · Extended · Lighter · Aster · Polymarket
+- Builder fee. A small flat fee per closed episode, settled on chain in native MNT.
+- x402 alpha API. Pay-per-call access to verified `StrategyMemory` over HTTP 402, so other agents can buy the brain. No subscription, and everything settles on chain.
 
-On-chain execution (a spot grid on iZiSwap / Mantle) runs through the same engine today.
+## One engine, every venue
 
-## Architecture
+Every exchange is one `ExchangePort` adapter and the engine never changes, so expansion is the roadmap.
 
-```mermaid
-flowchart TB
-  subgraph FE["Product UI (talks to the backend API only)"]
-    TG[Telegram app]
-    WEB[Web · Verifier]
-  end
-  subgraph BE["Backend — Python, hexagonal"]
-    SVC["GridService facade"]
-    AGENT["Agent loop: sense · recall · decide · learn"]
-    ENG["Grid engine: re-center · breaker · TP/trail"]
-    ALPHA["x402 alpha API"]
-    REG[Adapter registry]
-    SVC --> AGENT --> ENG --> REG
-  end
-  subgraph SIG[AI signals]
-    ELFA[Elfa]; NANSEN[Nansen]; SURF[Surf]
-  end
-  subgraph CHAIN["Mantle — verifiable brain"]
-    LEDGER[StrategyLedger]; MEM[StrategyMemory]; VAULT[Vault]
-  end
-  TG --> SVC
-  WEB --> ALPHA & CHAIN
-  AGENT --> SIG & CHAIN
-  REG --> BYBIT["Bybit · Hyperliquid · …"]
-```
+Live now: Bybit. Next: Hyperliquid, Extended, Lighter, Aster and Polymarket. On-chain execution already runs through the same engine as a spot grid on Mantle.
 
-The UI **never** imports the engine, adapters, or any exchange/chain SDK — it talks to
-the backend only through the typed `GridService` seam.
-
-## Monorepo
+## Repository
 
 | Path | Role |
 |---|---|
-| `contracts/` | Mantle Solidity (Foundry): StrategyLedger · StrategyMemory · Vault |
-| `backend/` | Python engine + agent + `GridService` + HTTP/alpha APIs |
-| `frontend/telegram/` | aiogram bot — the product UI |
-| `frontend/web/` | landing + public Verifier page |
-| `deploy/` | one-command VPS deploy (systemd + Postgres) |
+| `contracts/` | Mantle Solidity (Foundry): StrategyLedger, StrategyMemory, Vault |
+| `backend/` | Python engine, agent loop, `GridService`, HTTP and alpha APIs |
+| `frontend/telegram/` | aiogram bot, the product UI |
+| `frontend/web/` | landing page and public Verifier |
+| `deploy/` | one-command VPS deploy on systemd and Postgres |
 
-## Quickstart
+## Run it locally
 
 ```bash
 cd backend
 python3.11 -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev,bybit]"
-pytest                                     # full suite, offline, no keys
-python -m perpsagent.runner --mode dry     # the whole loop on fakes
+pytest                                  # full suite, offline, no keys needed
+python -m perpsagent.runner --mode dry  # the whole loop on fakes
 ```
 
-- Run it live & host it: [`deploy/README.md`](deploy/README.md) · [`DEPLOY.md`](DEPLOY.md)
-- Strategy & the learning loop: [`docs/CONCEPT.md`](docs/CONCEPT.md)
-- Backend APIs & runner flags: [`backend/README.md`](backend/README.md)
+- Host it live: [`deploy/README.md`](deploy/README.md) and [`DEPLOY.md`](DEPLOY.md)
+- Strategy and the learning loop: [`docs/CONCEPT.md`](docs/CONCEPT.md)
+- Backend APIs and runner flags: [`backend/README.md`](backend/README.md)
+- Full documentation: [docs.perpsagent.xyz](https://docs.perpsagent.xyz)
 
 ## Safety
 
-- **Testnet by default** — the config guard refuses env↔venue mismatches in both
-  directions; trading real money is an explicit opt-in.
-- **Commit on-chain before trading**, attest the verified outcome after.
-- **Maker-only** grids; taker only on emergency flatten. Circuit breaker + profit guard
-  run on every fill and tick. Fills survive WebSocket gaps and process restarts.
-- **Non-custodial** — your keys, your account; the Vault never bridges to the venue.
+- Testnet by default. The config guard refuses an environment and venue mismatch in both directions, and trading real money is an explicit opt-in.
+- Commit on chain before trading, attest the verified outcome after.
+- Maker-only grids, with taker orders only on an emergency flatten. The circuit breaker and profit guard run on every fill and tick. Fills survive WebSocket gaps and process restarts.
+- Non-custodial. Your keys and your account, and the Vault never bridges to the venue.
+
+## Team
+
+Built by Team PerpsAgent.
+
+- Yeheskiel Yunus Tame, [@YeheskielTame](https://x.com/YeheskielTame)
+- Bima Jadiva, [@BimaJadiva07](https://x.com/BimaJadiva07)
+
+## Links
+
+- Website and waitlist: [perpsagent.xyz](https://perpsagent.xyz)
+- Documentation: [docs.perpsagent.xyz](https://docs.perpsagent.xyz)
+- Demo video: [youtu.be/0Vubbfn32_c](https://youtu.be/0Vubbfn32_c)
+- X: [@perpsagent](https://x.com/perpsagent)
+
+Track: Mantle AI Awakening, AI Trading and Strategy, BGA.
+</content>

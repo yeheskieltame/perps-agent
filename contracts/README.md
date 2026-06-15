@@ -1,6 +1,6 @@
 # Contracts (Mantle)
 
-Foundry project — the on-chain brain + trust layer. Solidity 0.8.34, all three
+Foundry project, the on-chain brain + trust layer. Solidity 0.8.34, all three
 UUPS-upgradeable (OpenZeppelin v5), ERC-7201 namespaced storage, custom errors,
 AccessControl; Vault adds ReentrancyGuard + Pausable + SafeERC20.
 
@@ -27,7 +27,7 @@ forge script script/Deploy.s.sol:Deploy --rpc-url mantle_testnet --broadcast --v
 ```
 
 Tests use `UnsafeUpgrades` (no ffi, run anywhere); deploy uses the validated
-`Upgrades` library (storage-layout safety checks — needs Node.js). Local quick
+`Upgrades` library (storage-layout safety checks, needs Node.js). Local quick
 deploy: `script/DeployLocal.s.sol` against `anvil`.
 
 ## Security
@@ -39,3 +39,7 @@ deploy: `script/DeployLocal.s.sol` against `anvil`.
 - On-chain objective is signed `riskAdjBps` (risk-adjusted), never raw PnL.
 
 Not audited. Testnet only until reviewed.
+
+---
+
+Part of [Perps Agent](https://perpsagent.xyz). Full documentation: [docs.perpsagent.xyz](https://docs.perpsagent.xyz).

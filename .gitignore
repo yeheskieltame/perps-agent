@@ -54,3 +54,7 @@ backend/perpsagent.db
 .trash/
 *.db-shm
 *.db-wal
+
+# scratch / working images (pitch deck exports), not for the repo
+/.??*.png
+/grid-trading-slide.png

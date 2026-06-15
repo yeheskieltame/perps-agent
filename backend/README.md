@@ -36,35 +36,35 @@ plus a `registry.py` entry. The engine and agent never change.
 The UI never imports the engine, adapters, or any SDK. Everything below is the
 complete surface the frontend may depend on.
 
-## 1. HTTP API — workers + gateway
+## 1. HTTP API, workers + gateway
 
 The product API. One stateless **gateway** (`app/gateway.py`, default `:8080`)
 routes by user to N **workers** (`app/worker.py`, one shard each, default `:9000`).
-Single-node dev: call a worker directly — same endpoints.
+Single-node dev: call a worker directly, same endpoints.
 
 Identity: every request carries `X-User-Id: <int>` (for the Telegram bot this is
-the chat id). The header is **trusted input** — terminate auth at the gateway/ingress
+the chat id). The header is **trusted input**, terminate auth at the gateway/ingress
 before exposing the worker to untrusted clients.
 
 | Method | Path | Body | Returns |
 |---|---|---|---|
-| GET | `/healthz` | — | `{"ok": true, "node": "0"}` |
+| GET | `/healthz` | n/a | `{"ok": true, "node": "0"}` |
 | POST | `/v1/grids` | grid config (below) | `{"instance_id": "BTCUSDT-0-ab12cd34"}` |
-| DELETE | `/v1/grids/{instance_id}` | — | `{"ok": true}` (cancel orders, mark CLOSED) |
-| POST | `/v1/grids/{instance_id}/pause` | — | `{"ok": true}` |
-| GET | `/v1/status` | — | `[{"instance_id", "state", "realized_pnl", "fill_count"}]` |
-| GET | `/v1/balance` | — | `{"equity": "73191.75", "available": "...", "currency": "USDT"}` |
-| GET | `/v1/market/{market}` | — | `{"market", "bid", "ask", "mid"}` — live top-of-book via the user's client |
-| PUT | `/v1/credentials` | `{api_key, api_secret, testnet=true}` | `{"ok": true, "testnet": ...}` — seal the user's venue keys (testnet-first; mainnet is explicit opt-in) |
-| GET | `/v1/credentials` | — | `{"connected", "testnet", "key_preview"}` or `{"connected": false}` — never echoes a secret |
-| DELETE | `/v1/credentials` | — | `{"ok": true}` — forget keys + tear down the session |
+| DELETE | `/v1/grids/{instance_id}` | n/a | `{"ok": true}` (cancel orders, mark CLOSED) |
+| POST | `/v1/grids/{instance_id}/pause` | n/a | `{"ok": true}` |
+| GET | `/v1/status` | n/a | `[{"instance_id", "state", "realized_pnl", "fill_count"}]` |
+| GET | `/v1/balance` | n/a | `{"equity": "73191.75", "available": "...", "currency": "USDT"}` |
+| GET | `/v1/market/{market}` | n/a | `{"market", "bid", "ask", "mid"}`, live top-of-book via the user's client |
+| PUT | `/v1/credentials` | `{api_key, api_secret, testnet=true}` | `{"ok": true, "testnet": ...}`, seal the user's venue keys (testnet-first; mainnet is explicit opt-in) |
+| GET | `/v1/credentials` | n/a | `{"connected", "testnet", "key_preview"}` or `{"connected": false}`, never echoes a secret |
+| DELETE | `/v1/credentials` | n/a | `{"ok": true}`, forget keys + tear down the session |
 
 Create-grid body (`POST /v1/grids`):
 
 ```json
 {
   "market": "BTCUSDT",          // required
-  "lower": "56000", "upper": "57100",   // band bounds — OR send "band" instead
+  "lower": "56000", "upper": "57100",   // band bounds, OR send "band" instead
   "band": "0.01",                // shorthand: bounds = live mid * (1 ± band)
   "levels": 10,                  // required
   "order_size": "0.001",         // base qty per level (default 0.01)
@@ -87,13 +87,13 @@ curl localhost:9000/v1/status -H 'X-User-Id: 42'
 ```
 
 Multi-tenancy: one `UserSession` per user with its **own** venue client (own keys,
-own private fill stream) — capital and fills are isolated per user by construction.
+own private fill stream), capital and fills are isolated per user by construction.
 With `PERPSAGENT_CRED_MASTER_KEY` set, each user's Bybit keys are stored
 Fernet-encrypted (SQLite by default, Postgres when `PERPSAGENT_POSTGRES_DSN` is
 set) and their client is rebuilt from the sealed keys on demand; without the
 master key the worker falls back to a shared demo `FakeExchange`.
 
-## 2. `GridService` facade — in-process
+## 2. `GridService` facade, in-process
 
 Same contract as the HTTP API, as a typed Python protocol (`app/service.py`) for a
 bot embedded in the worker process:
@@ -121,7 +121,7 @@ sequenceDiagram
   FE->>GS: stop_grid(user_id, id)
 ```
 
-## 3. Alpha API — verified intelligence, metered with x402
+## 3. Alpha API, verified intelligence, metered with x402
 
 `app/alpha_api.py` (default `:8402`) sells the agent's brain per call. Proven live:
 challenge → EIP-3009 signature → verify → serve → settlement receipt; replay and
@@ -141,7 +141,7 @@ The x402 flow (scheme `exact`, network `mantle-sepolia`):
    header `X-PAYMENT: base64(PaymentPayload)`.
 3. **200** + body; header `X-PAYMENT-RESPONSE: base64({success, mode, payer, transaction})`.
    Settlement modes: `facilitator` / `onchain` / `deferred` (dev default until a
-   real EIP-3009 USDC is configured — see issue #29). Nonces are single-use
+   real EIP-3009 USDC is configured, see issue #29). Nonces are single-use
    (replay-protected); authorizations expire after `maxTimeoutSeconds` (300s).
 
 Response bodies (cached `PERPSAGENT_ALPHA_CACHE_TTL_S`, Redis-shared when
@@ -153,7 +153,7 @@ Response bodies (cached `PERPSAGENT_ALPHA_CACHE_TTL_S`, Redis-shared when
  "funding_rate": 6e-06, "range_width": 0.0097, "volume_z": 0.0,
  "smart_money_flow": 0.0, "social_momentum": -0.28}}
 
-// /v1/alpha/recall/BTCUSDT — episodes are on-chain-verified, ranked risk-adjusted
+// /v1/alpha/recall/BTCUSDT, episodes are on-chain-verified, ranked risk-adjusted
 {"market": "BTCUSDT", "regime": {...}, "episodes": [
   {"config": {"market": "BTCUSDT", "lower": "56006.3790", "upper": "57137.8210",
               "levels": 10, "spacing": "geometric", "order_size": "0.001"},
@@ -162,7 +162,7 @@ Response bodies (cached `PERPSAGENT_ALPHA_CACHE_TTL_S`, Redis-shared when
    "regime": {...}}]}
 ```
 
-## 4. On-chain reads — the Verifier page
+## 4. On-chain reads, the Verifier page
 
 The web Verifier recomputes results straight from Mantle Sepolia, independent of
 the backend. Addresses in the table below; ABIs in
@@ -196,7 +196,7 @@ the backend. Addresses in the table below; ABIs in
 
 Explicit flags override recalled params; unset ones are filled from on-chain
 recall. Live mode shuts down gracefully on **SIGINT or SIGTERM** (cancel orders →
-attest → write memory → drain confirmations) — safe under nohup/systemd/docker.
+attest → write memory → drain confirmations), safe under nohup/systemd/docker.
 
 ## Scripts
 
@@ -207,6 +207,10 @@ attest → write memory → drain confirmations) — safe under nohup/systemd/do
 | `scripts/demo_dry_run.py` | scripted full-loop demo on fakes |
 | `scripts/itest_chain.py` | commit → attest → write → recall round-trip against a local anvil |
 
-Config reference: [`.env.example`](.env.example) — every `PERPSAGENT_*` variable
+Config reference: [`.env.example`](.env.example), every `PERPSAGENT_*` variable
 with comments. The guard (`Settings.assert_consistent`) refuses env↔venue
 mismatches in both directions before any money path runs.
+
+---
+
+Part of [Perps Agent](https://perpsagent.xyz). Full documentation: [docs.perpsagent.xyz](https://docs.perpsagent.xyz).

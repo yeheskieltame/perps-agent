@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="perps-agent-hero.png" alt="Perps Agent" width="900">
+  <img src="submission-assets/01-hero.png" alt="Perps Agent" width="900">
 </p>
 
 <p align="center">
@@ -28,7 +28,7 @@ Track records are screenshots, not proof. Parameters get quietly tuned to fit pa
 
 There is also no shared memory. Each bot relearns the same lessons in private, so nothing compounds. The industry sells outcomes it cannot prove and intelligence it cannot accumulate.
 
-![The black box problem](submission-assets/d2-problem.png)
+![Three reasons you can't trust a bot](submission-assets/07-problem.png)
 
 ## The solution
 
@@ -108,8 +108,6 @@ LEARN     the next RECALL starts from a better prior
 - Live on Bybit. The full sense, recall, commit, execute, attest and learn loop runs end to end on a real venue. Preflight passes with live equity and live signals.
 - Contracts deployed on Mantle. Ledger, Memory and Vault are live and wired into the backend.
 - Waitlist open. The landing page and public docs are live, and users are signing up at [perpsagent.xyz](https://perpsagent.xyz).
-
-![Product UI](submission-assets/01-hero.png)
 
 ## How we monetize
 

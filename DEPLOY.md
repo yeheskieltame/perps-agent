@@ -68,7 +68,7 @@ per-user venue keys, never commit/log it.
 ### Sharded deploy (workers + gateway)
 
 Horizontal scale = N worker processes (one shard each) behind one stateless gateway
-that routes by `user_id` (consistent hashing, `plan/SCALING.md` #10). Each worker
+that routes by `user_id` (consistent hashing). Each worker
 owns its users' sessions/streams/clients; the gateway holds no state.
 
 ```bash

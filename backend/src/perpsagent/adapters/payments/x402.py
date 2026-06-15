@@ -1,4 +1,4 @@
-"""x402 — pay-per-call settlement for the Perps Agent alpha API (docs/CONCEPT.md §7).
+"""x402 — pay-per-call settlement for the Perps Agent alpha API (docs.perpsagent.xyz).
 
 Implements the x402 flow (HTTP 402 Payment Required, scheme "exact", EVM):
 1. Unpaid request → 402 with {"x402Version", "error", "accepts": [PaymentRequirements]}.

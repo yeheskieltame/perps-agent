@@ -1,6 +1,8 @@
 <p align="center">
-  <img src="submission-assets/01-hero.png" alt="Perps Agent" width="900">
+  <img src="submission-assets/Logo-Brands/perps-agent-logo.png" alt="Perps Agent" width="104">
 </p>
+
+<h1 align="center">Perps Agent</h1>
 
 <p align="center">
   <b>A verifiable, self-improving grid trading agent. Live on Bybit, run from Telegram, proven on Mantle.</b>
@@ -16,6 +18,22 @@
   <a href="https://docs.google.com/presentation/d/1aGbb-JPlc4B1iTZ4cBTffXJDkangvEEqT0zNALIa0bE/edit?usp=sharing"><b>Pitch deck</b></a>
   &nbsp;|&nbsp;
   <a href="https://x.com/perpsagent"><b>X</b></a>
+</p>
+
+<p align="center">
+  <img src="submission-assets/01-hero.png" alt="Perps Agent" width="880">
+</p>
+
+<p align="center">
+  <img src="submission-assets/Logo-Brands/mantle-logo.svg" alt="Mantle" height="34">
+  &nbsp;&nbsp;
+  <img src="submission-assets/Logo-Brands/bybit-logo.jpg" alt="Bybit" height="34">
+  &nbsp;&nbsp;
+  <img src="submission-assets/Logo-Brands/elfa-ai-logo.jpg" alt="Elfa" height="34">
+  &nbsp;&nbsp;
+  <img src="submission-assets/Logo-Brands/nansen-ai-logo.png" alt="Nansen" height="34">
+  &nbsp;&nbsp;
+  <img src="submission-assets/Logo-Brands/surf-ai-logo.jpg" alt="Surf" height="34">
 </p>
 
 ---
@@ -78,13 +96,41 @@ The optimization target is risk-adjusted performance, never raw PnL.
 
 ![Adaptive grid strategy](submission-assets/03-grid.png)
 
-## Built like a startup, not a script
+## Architecture
 
-The architecture is the moat. The product UI never touches the engine, the adapters, or any exchange SDK. It talks to the backend through a single typed `GridService` facade. Every exchange implements one `ExchangePort` adapter, so adding a venue is one folder, and the engine and agent never change.
+The architecture is the moat. The product UI never touches the engine, the adapters, or any exchange SDK. It talks to the backend through a single typed `GridService` facade. Every exchange implements one `ExchangePort` adapter, so adding a venue is one folder, and the engine and agent never change. This is why expansion is cheap and the codebase scales to many users and many venues without a rewrite.
 
-This is why expansion is cheap and the codebase scales to many users and many venues without a rewrite.
-
-![On Mantle](submission-assets/04-mantle.png)
+```mermaid
+flowchart TB
+  subgraph UI["Product UI, talks to the backend API only"]
+    TG["Telegram app"]
+    WEB["Web, public Verifier"]
+  end
+  subgraph BE["Backend, Python, hexagonal"]
+    SVC["GridService facade"]
+    AGENT["Agent loop: sense, recall, decide, learn"]
+    ENG["Grid engine: re-center, breaker, take-profit and trailing"]
+    ALPHA["x402 alpha API"]
+    REG["Adapter registry"]
+    SVC --> AGENT --> ENG --> REG
+  end
+  subgraph SIG["AI signals"]
+    ELFA["Elfa"]
+    NANSEN["Nansen"]
+    SURF["Surf"]
+  end
+  subgraph CHAIN["Mantle, the verifiable brain"]
+    LEDGER["StrategyLedger"]
+    MEM["StrategyMemory"]
+    VAULT["Vault"]
+  end
+  TG --> SVC
+  WEB --> ALPHA
+  WEB --> CHAIN
+  AGENT --> SIG
+  AGENT --> CHAIN
+  REG --> VENUES["Bybit, Hyperliquid, and more"]
+```
 
 The verifiable learning loop, end to end:
 
@@ -96,6 +142,8 @@ EXECUTE   run the maker-only grid on Bybit
 ATTEST    write the verified outcome back to Mantle
 LEARN     the next RECALL starts from a better prior
 ```
+
+![On Mantle](submission-assets/04-mantle.png)
 
 ### Live on Mantle Sepolia (chainId 5003)
 
@@ -120,9 +168,23 @@ We charge for the system, not for the PnL.
 
 ## One engine, every venue
 
-Every exchange is one `ExchangePort` adapter and the engine never changes, so expansion is the roadmap.
+Every exchange is one `ExchangePort` adapter and the engine never changes, so expansion is the roadmap. Live now on Bybit. Coming next, each as a single adapter:
 
-Live now: Bybit. Next: Hyperliquid, Extended, Lighter, Aster and Polymarket. On-chain execution already runs through the same engine as a spot grid on Mantle.
+<p align="center">
+  <img src="submission-assets/Logo-Brands/hyperliquid-logo.jpg" alt="Hyperliquid" height="34">
+  &nbsp;&nbsp;
+  <img src="submission-assets/Logo-Brands/extended-logo.jpg" alt="Extended" height="34">
+  &nbsp;&nbsp;
+  <img src="submission-assets/Logo-Brands/lighter-logo.jpg" alt="Lighter" height="34">
+  &nbsp;&nbsp;
+  <img src="submission-assets/Logo-Brands/aster-logo.jpg" alt="Aster" height="34">
+  &nbsp;&nbsp;
+  <img src="submission-assets/Logo-Brands/polymarket-logo.jpg" alt="Polymarket" height="34">
+  &nbsp;&nbsp;
+  <img src="submission-assets/Logo-Brands/kalshi-logo.jpg" alt="Kalshi" height="34">
+</p>
+
+On-chain execution already runs through the same engine as a spot grid on Mantle.
 
 ## Repository
 
@@ -145,9 +207,8 @@ python -m perpsagent.runner --mode dry  # the whole loop on fakes
 ```
 
 - Host it live: [`deploy/README.md`](deploy/README.md) and [`DEPLOY.md`](DEPLOY.md)
-- Strategy and the learning loop: [`docs/CONCEPT.md`](docs/CONCEPT.md)
 - Backend APIs and runner flags: [`backend/README.md`](backend/README.md)
-- Full documentation: [docs.perpsagent.xyz](https://docs.perpsagent.xyz)
+- Full documentation, strategy and the learning loop: [docs.perpsagent.xyz](https://docs.perpsagent.xyz)
 
 ## Safety
 

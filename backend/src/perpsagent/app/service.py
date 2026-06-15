@@ -61,7 +61,7 @@ class AppService:
     product path), or a single `exchange` shared by all users (single-account /
     demo mode). Ownership is the session boundary: a user can only act on grids in
     their own session. Durable ownership across restarts is the next step
-    (Postgres) — see plan/SCALING.md #8.
+    (Postgres) — see docs.perpsagent.xyz.
     """
 
     def __init__(self, exchange=None, store=None,
@@ -74,14 +74,14 @@ class AppService:
         self._exchange = exchange
         self._store = store
         self._client_factory = client_factory
-        # Sharding (plan/SCALING.md #10): when this worker is one shard of many,
+        # Sharding (docs.perpsagent.xyz): when this worker is one shard of many,
         # `router` + `node` let it serve/recover ONLY the users it owns. Both None
         # (single-node) → no shard filtering.
         self._router = router
         self._node = str(node) if node is not None else None
         self._sessions: dict[int, UserSession] = {}
         self._prefs: dict[int, dict] = {}  # settings fallback when the store has none
-        # Verifiable Learning Loop (docs/CONCEPT.md §3), behind the GridService seam
+        # Verifiable Learning Loop (docs.perpsagent.xyz), behind the GridService seam
         # so the UI never sees the chain. `chain` is a ChainPort (MantleChainClient
         # in prod, MemoryChain in tests); None disables proofs (dev/demo). ONE shared
         # signer for all users — proofs are signed by the operator, not the user

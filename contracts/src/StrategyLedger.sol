@@ -14,7 +14,7 @@ import {IStrategyLedger} from "./interfaces/IStrategyLedger.sol";
 ///         config hash BEFORE trading so parameters cannot be retrofitted to
 ///         results; attest verified outcomes after. UUPS-upgradeable.
 /// @dev    Uses ERC-7201 namespaced storage to remain upgrade-safe. See
-///         docs/CONCEPT.md §3. Only the committing agent may attest its instance.
+///         docs.perpsagent.xyz Only the committing agent may attest its instance.
 /// @custom:security-contact security@perpsagent.example
 contract StrategyLedger is Initializable, AccessControlUpgradeable, UUPSUpgradeable, IStrategyLedger {
     bytes32 public constant UPGRADER_ROLE = keccak256("UPGRADER_ROLE");

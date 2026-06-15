@@ -4,7 +4,7 @@ Deterministic by default (no general-LLM dependency): a concise, human-readable
 summary derived from the fused regime (Surf microstructure + Elfa social + Nansen
 smart-money) + recalled on-chain evidence + chosen params. This keeps the agent
 fully explainable on the confirmed credit stack and is what an on-chain decision
-log references (docs/CONCEPT.md §4). An optional LLM (e.g. Surf's NL chat) can
+log references (docs.perpsagent.xyz). An optional LLM (e.g. Surf's NL chat) can
 enrich this string, but is not required."""
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 """SENSE — build a RegimeFingerprint by fusing venue microstructure with external
-signals (Elfa real-time, Nansen smart-money). (docs/CONCEPT.md §3 step 1)
+signals (Elfa real-time, Nansen smart-money). (docs.perpsagent.xyz)
 
 External providers can be blind on a market (Surf has no HYPE feed -> trend=0/
 vol=0) or DEAF to its trend (vol!=0 with trend=0 during a slow grind — the

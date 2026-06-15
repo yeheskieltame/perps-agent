@@ -1,4 +1,4 @@
-# Local Postgres for the durable multi-tenant store (plan/SCALING.md #8) and the
+# Local Postgres for the durable multi-tenant store (docs.perpsagent.xyz) and the
 # PostgresStore integration tests. Port 55432 avoids clashing with a system PG.
 #
 #   docker compose up -d
@@ -26,7 +26,7 @@ services:
       interval: 2s
       timeout: 3s
       retries: 20
-  # Shared alpha-API cache across replicas (plan/SCALING.md #9).
+  # Shared alpha-API cache across replicas (docs.perpsagent.xyz).
   #   PERPSAGENT_REDIS_URL=redis://localhost:56379/0   (app)
   #   REDIS_URL=redis://localhost:56379/0  pytest tests/test_redis_cache.py
   redis:

@@ -2,7 +2,7 @@
 
   cd backend && .venv/bin/python scripts/x402_pay.py [URL]
 
-Flow (the buyer side of docs/CONCEPT.md §7):
+Flow (the buyer side of docs.perpsagent.xyz):
   1. GET the alpha endpoint            -> HTTP 402 + PaymentRequirements (payTo, amount, MNT)
   2. pay that amount of native MNT to payTo on Mantle (a real tx)
   3. retry with header  X-PAYMENT: base64({scheme:"mnt-native", payload:{txHash, from}})

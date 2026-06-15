@@ -1,4 +1,4 @@
-"""RedisCache — a CachePort shared across UI replicas (plan/SCALING.md #9).
+"""RedisCache — a CachePort shared across UI replicas (docs.perpsagent.xyz).
 
 Without it, every UI replica keeps its own in-process cache and a request burst
 stampedes Bybit/Mantle/Surf N times over. Redis gives one shared, TTL'd cache for

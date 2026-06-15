@@ -1,6 +1,6 @@
 """LEARN — turn an attested episode into a memory record. Because the buffer is
 public on-chain, the agent gains a population-level prior, not just self-history.
-(docs/CONCEPT.md §3 step 6)"""
+(docs.perpsagent.xyz)"""
 from __future__ import annotations
 
 from ..domain.models import EpisodeOutcome, GridConfig, MemoryRecord, RegimeFingerprint

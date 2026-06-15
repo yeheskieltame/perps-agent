@@ -60,7 +60,7 @@ class ChainPort(Protocol):
 
     This is what makes the on-chain layer *strategy*, not just verification:
     `recall` reads verified experience back into the agent's decision, and the
-    same records are the policy's training data (docs/CONCEPT.md §3, §4).
+    same records are the policy's training data (docs.perpsagent.xyz, §4).
     """
 
     async def commit_strategy(self, instance_id: str, config: GridConfig) -> str:

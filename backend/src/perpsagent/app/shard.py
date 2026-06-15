@@ -1,5 +1,5 @@
 """ShardRouter — consistent hashing so the engine plane scales across workers
-(plan/SCALING.md #10).
+(docs.perpsagent.xyz).
 
 `shard = route(user_id)` decides which worker owns a user; that worker holds all of
 that user's engines, fill streams, and exchange clients (one event loop per worker

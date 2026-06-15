@@ -4,7 +4,7 @@ Auth: header `apiKey`. Base `https://api.nansen.ai`.
 Endpoint: POST /api/v1/smart-money/netflow.
 Maps the market's base token aggregated 24h net flow (USD) to a bounded
 `smart_money_flow` signal in (-1, 1) via tanh. Positive = smart money accumulating.
-Fails soft (returns 0). See docs/CONCEPT.md §3 (SENSE)."""
+Fails soft (returns 0). See docs.perpsagent.xyz (SENSE)."""
 from __future__ import annotations
 
 import math

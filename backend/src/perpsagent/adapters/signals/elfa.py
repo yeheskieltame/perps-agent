@@ -4,7 +4,7 @@ Auth: header `x-elfa-api-key`. Base `https://api.elfa.ai`.
 Endpoint: GET /v2/aggregations/trending-tokens?timeWindow=24h (60 req/min PAYG).
 Maps the market's base token mention momentum to a bounded `social_momentum`
 signal in (-1, 1). Fails soft (returns 0) so the agent never crashes on a signal
-outage. See docs/CONCEPT.md §3 (SENSE).
+outage. See docs.perpsagent.xyz (SENSE).
 """
 from __future__ import annotations
 

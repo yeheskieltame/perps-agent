@@ -13,7 +13,7 @@ import {IStrategyMemory} from "./interfaces/IStrategyMemory.sol";
 /// @notice Append-only, public experience buffer: regime -> params -> verified
 ///         outcome. Read back by the agent (recall) to choose parameters and to
 ///         learn. This is what makes Mantle the strategy *brain*, not just an
-///         audit log (docs/CONCEPT.md §4). UUPS-upgradeable.
+///         audit log (docs.perpsagent.xyz). UUPS-upgradeable.
 /// @dev    `agent` and `timestamp` are set from msg.sender / block to prevent
 ///         spoofing. Records are append-only; there is no delete.
 /// @custom:security-contact security@perpsagent.example

@@ -9,7 +9,7 @@ from typing import Optional
 
 class Venue(str, Enum):
     BYBIT = "bybit"
-    MANTLE_DEX = "mantle_dex"  # iZiSwap (default) — see docs/CONCEPT.md §5
+    MANTLE_DEX = "mantle_dex"  # iZiSwap (default) — see docs.perpsagent.xyz
     FAKE = "fake"
 
 
@@ -101,7 +101,7 @@ class RegimeFingerprint:
     """Compact, queryable description of market conditions at decision time.
 
     Bucketed into a `regimeKey` on-chain so `recall` can k-NN over verified
-    episodes (docs/CONCEPT.md §3 step 2).
+    episodes (docs.perpsagent.xyz).
     """
     realized_vol: float
     trend_strength: float  # signed ADX-like

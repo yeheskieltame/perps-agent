@@ -1,5 +1,5 @@
 """Perps Agent alpha API — x402-gated endpoints selling verified intelligence
-(the "two-sided asset": our agent's brain, sold per call — docs/CONCEPT.md §7).
+(the "two-sided asset": our agent's brain, sold per call — docs.perpsagent.xyz).
 
     GET /healthz                      free
     GET /v1/alpha/regime/{market}     paid — current fused regime fingerprint

@@ -58,3 +58,10 @@ backend/perpsagent.db
 # scratch / working images (pitch deck exports), not for the repo
 /.??*.png
 /grid-trading-slide.png
+
+# pitch deck lives on Google Slides, not in the repo
+*.pptx
+
+# submission working files (deck on Google Slides; dorahacks writeup keeps team info off GitHub)
+/submission-assets/deck/
+/SUBMISSION-dorahacks.md

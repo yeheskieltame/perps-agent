@@ -15,7 +15,7 @@ import {IVault} from "./interfaces/IVault.sol";
 /// @author Perps Agent
 /// @notice Holds a performance bond + settles fees on-chain (mETH / USDe / USDC).
 ///         Trading capital stays on the user's CEX account; this vault NEVER
-///         bridges to the CEX (honest custody boundary, docs/CONCEPT.md §7, §11).
+///         bridges to the CEX (honest custody boundary, docs.perpsagent.xyz, §11).
 /// @dev    UUPS-upgradeable, ERC-7201 storage. Checks-Effects-Interactions +
 ///         a self-contained reentrancy guard (OZ 5.6 ships only the transient
 ///         variant; we keep the guard in namespaced storage to avoid any

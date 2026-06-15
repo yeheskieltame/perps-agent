@@ -1,5 +1,5 @@
 """Gateway — the stateless front door that routes each request to the worker owning
-the user (plan/SCALING.md #10).
+the user (docs.perpsagent.xyz).
 
 It reads `X-User-Id`, computes `shard = ShardRouter.route(user_id)`, and reverse-
 proxies the call to that shard's worker URL. Because routing is consistent hashing

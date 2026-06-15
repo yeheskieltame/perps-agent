@@ -1,6 +1,6 @@
 """Pure regime helpers: turn a RegimeFingerprint into a stable, bucketed key the
 agent passes to StrategyMemory on-chain (the k-NN key). Coarse bucketing groups
-'similar' regimes so recall finds analogous past episodes (docs/CONCEPT.md §3)."""
+'similar' regimes so recall finds analogous past episodes (docs.perpsagent.xyz)."""
 from __future__ import annotations
 
 import hashlib

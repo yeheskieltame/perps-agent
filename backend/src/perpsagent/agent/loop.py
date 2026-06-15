@@ -1,4 +1,4 @@
-"""The Verifiable Learning Loop (docs/CONCEPT.md §3).
+"""The Verifiable Learning Loop (docs.perpsagent.xyz).
 
 plan_and_launch:  SENSE -> RECALL -> DECIDE -> COMMIT(on-chain) -> EXECUTE
 close_and_learn:  ATTEST(on-chain) -> write StrategyMemory (LEARN)

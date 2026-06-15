@@ -1,7 +1,7 @@
 """UserSession — one user's exchange client + the single fill-stream consumer that
 routes fills to that user's engines.
 
-This is what makes the engine multi-tenant (plan/SCALING.md #6):
+This is what makes the engine multi-tenant (docs.perpsagent.xyz):
 - each user trades on THEIR OWN venue keys (non-custodial; capital isolation);
 - ONE private fill stream per user, consumed once and routed by `instance_id` to
   the owning engine. The old path had every engine call `stream_fills()` itself,
@@ -9,7 +9,7 @@ This is what makes the engine multi-tenant (plan/SCALING.md #6):
   (O(N^2) fan-out). Here a user's grids share one stream and one consumer.
 
 State is in-process (per worker). Durable ownership/recovery across restarts is
-the next step (Postgres, StorePort) — see plan/SCALING.md #8.
+the next step (Postgres, StorePort) — see docs.perpsagent.xyz.
 """
 from __future__ import annotations
 

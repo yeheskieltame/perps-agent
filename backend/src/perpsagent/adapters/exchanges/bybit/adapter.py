@@ -1,4 +1,4 @@
-"""Bybit v5 USDT-perp adapter — the primary execution venue (docs/CONCEPT.md §5).
+"""Bybit v5 USDT-perp adapter — the primary execution venue (docs.perpsagent.xyz).
 
 Non-custodial: the user supplies their own Bybit API keys; capital never leaves
 Bybit. Maker-only grids (timeInForce=PostOnly); fills arrive over the private

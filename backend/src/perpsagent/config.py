@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     postgres_dsn: str = ""        # durable multi-tenant store; empty = use SQLite (store_db_path)
     cred_master_key: str = ""     # Fernet key for encrypting per-user venue keys (never commit/log)
 
-    # Sharded engine plane (plan/SCALING.md #10). One worker process per node.
+    # Sharded engine plane (docs.perpsagent.xyz). One worker process per node.
     shard_node: str = "0"         # this worker's node id (must be one of the shard set)
     shard_count: int = 1          # number of shards (worker builds ShardRouter(shard_count))
     worker_port: int = 9000       # this worker's HTTP port
@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     gateway_port: int = 8080      # gateway HTTP port
     shard_urls: str = ""          # gateway routing map, JSON {"0":"http://host:9000", ...}
 
-    # Builder fee (monetization #1, docs/CONCEPT.md §7). A flat fee settled ON-CHAIN
+    # Builder fee (monetization #1, docs.perpsagent.xyz). A flat fee settled ON-CHAIN
     # from the operator's Vault bond to the treasury on each closed episode — "charge
     # for the system, not for PnL". Atomic units of fee_asset (USDC 6dp: 10000 = $0.01).
     # 0 = disabled. Requires the operator to hold FEE_MANAGER_ROLE (deployer does) and

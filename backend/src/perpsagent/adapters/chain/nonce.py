@@ -8,7 +8,7 @@ signer seeds its nonce ONCE and hands out strictly increasing nonces under a loc
 submission never waits for a receipt, so many txs pipeline (nonce N, N+1, …) and
 confirm in parallel — throughput is bounded by block inclusion, not by serial
 round-trips. One instance per wallet; a wallet pool is one NonceManager per lane
-(plan/SCALING.md #7).
+(docs.perpsagent.xyz).
 """
 from __future__ import annotations
 

@@ -1,6 +1,6 @@
 """Worker entrypoint — serves ONE shard of the engine plane over HTTP.
 
-One worker process = one event loop = one shard (plan/SCALING.md #10). It owns the
+One worker process = one event loop = one shard (docs.perpsagent.xyz). It owns the
 users `ShardRouter` assigns to its node, holds their sessions / fill streams /
 exchange clients, and exposes the `GridService` facade over HTTP so the gateway
 (and UI) reach it the same way regardless of which worker a user lands on. Run N of

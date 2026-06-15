@@ -3,7 +3,7 @@
 Starts as a k-NN-with-priors policy: if the on-chain memory has verified episodes
 for this regime, reuse the best one's shape (band width, level count, spacing)
 re-centered on the current mid; otherwise fall back to safe defaults. The reward
-that ranks recall is RISK-ADJUSTED, never raw PnL (docs/CONCEPT.md §4)."""
+that ranks recall is RISK-ADJUSTED, never raw PnL (docs.perpsagent.xyz)."""
 from __future__ import annotations
 
 from decimal import Decimal

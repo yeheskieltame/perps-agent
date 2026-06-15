@@ -4,7 +4,7 @@ iZiSwap has native on-chain limit orders that map 1:1 to grid levels: a grid SEL
 is a limit order selling base for quote at a point above mid; a grid BUY sells
 quote for base at a point below mid. This makes the SAME grid engine run on-chain
 on Mantle — literal end-to-end execution + real Mantle DeFi integration
-(docs/CONCEPT.md §5-6).
+(docs.perpsagent.xyz-6).
 
 Price model (iZiSwap): the pool discretizes price into integer **points** where
 `undecimal_price_X_by_Y = 1.0001 ** point`, tokenX is the lower-address token, and

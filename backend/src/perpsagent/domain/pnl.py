@@ -1,7 +1,7 @@
 """Pure performance metrics.
 
 The optimization target is *risk-adjusted*, not raw PnL — Perps Agent rewards
-"better systems, not the highest PnL" (docs/CONCEPT.md §4). `recall` ranks past
+"better systems, not the highest PnL" (docs.perpsagent.xyz). `recall` ranks past
 episodes by the same score.
 """
 from __future__ import annotations

@@ -21,6 +21,12 @@ def test_aliases_normalize():
     assert out == {"leverage": "25", "timeframe": "1h", "max_drawdown": "3", "trail_arm": "0.2"}
 
 
+def test_round_numbers_render_plain_not_scientific():
+    # '100'/'20'/'1000' must NOT come back as '1E+2'/'2E+1'/'1E+3' (ugly in the UI)
+    out = prefs.validate_updates({"size": "100", "leverage": "20", "max_inventory": "1000"})
+    assert out == {"size": "100", "leverage": "20", "max_inventory": "1000"}
+
+
 def test_unknown_key_and_bad_values_rejected():
     with pytest.raises(ValueError, match="unknown setting"):
         prefs.validate_updates({"banana": "1"})

@@ -39,7 +39,7 @@ def _dec(raw: str, lo: Decimal, hi: Decimal | None, what: str) -> str:
     if v < lo or (hi is not None and v > hi):
         rng = f">= {lo}" if hi is None else f"in [{lo}, {hi}]"
         raise ValueError(f"{what}: must be {rng}, got {v}")
-    return str(v.normalize())
+    return f"{v.normalize():f}"  # plain decimal — '100' not '1E+2' (clean in the UI)
 
 
 def _v_band(raw: str) -> str:

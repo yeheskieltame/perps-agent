@@ -378,6 +378,25 @@ class AppService:
         bid, ask = await session.exchange.best_bid_ask(market)
         return MarketView(market=market, bid=str(bid), ask=str(ask), mid=str((bid + ask) / 2))
 
+    async def recent_closes(self, user_id: int, market: str, timeframe: str,
+                            limit: int = 200) -> list:
+        """Recent bar closes (oldest→newest) for sizing the grid CENTER off structure,
+        not just the live tick. Empty if the venue has no klines or the call fails —
+        the caller then falls back to the current mid (never blocks a launch)."""
+        session = await self._session(user_id)
+        kl = getattr(session.exchange, "klines", None)
+        if kl is None:
+            return []
+        try:
+            return list(await kl(market, timeframe, limit))
+        except TypeError:                       # ports with a (market)-only signature
+            try:
+                return list(await kl(market))
+            except Exception:                   # noqa: BLE001
+                return []
+        except Exception:                       # noqa: BLE001 — a launch must never sink here
+            return []
+
     async def disconnect(self, user_id: int) -> None:
         """Tear down a user's session (stop the consumer, close the client)."""
         session = self._sessions.pop(user_id, None)

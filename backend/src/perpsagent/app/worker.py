@@ -157,7 +157,18 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
             except PermissionError as e:
                 raise web.HTTPConflict(reason=str(e)) from None
             mid = Decimal(m.mid)
-            body["lower"], body["upper"] = str(mid * (1 - band)), str(mid * (1 + band))
+            center = mid
+            if prefs.anchor_mode(knobs) == "mean":
+                closes = await service.recent_closes(
+                    user_id, market, prefs.timeframe_code(knobs), 200)
+                if closes:
+                    sma = sum(Decimal(str(c)) for c in closes) / len(closes)
+                    # Clamp the center to ±band of the live price so the grid always
+                    # straddles the market; within that, lean toward the recent average
+                    # — a grid launched at a range extreme settles back into the range
+                    # instead of buying the top / selling the bottom.
+                    center = max(mid * (1 - band), min(mid * (1 + band), sma))
+            body["lower"], body["upper"] = str(center * (1 - band)), str(center * (1 + band))
         cfg = _cfg_from_body(body, node, knobs)
         breaker, profit_guard, account_guard = prefs.build_guards(knobs)
         try:

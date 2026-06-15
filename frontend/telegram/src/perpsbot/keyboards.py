@@ -254,7 +254,8 @@ def price_result_kb(market: str) -> InlineKeyboardMarkup:
 # Friendly labels + tap-to-set presets per knob. Every picker also offers ✏️ Custom
 # (reply with a value) for anything off-menu; the backend validates either way.
 KNOB_LABEL = {
-    "band": "Range %", "levels": "Steps", "size": "Size/step", "leverage": "Leverage",
+    "band": "Range %", "levels": "Steps", "size": "Size/step", "anchor": "Center",
+    "leverage": "Leverage",
     "max_inventory": "Max inventory", "max_drawdown": "Max loss", "account_dd": "Account stop",
     "tp": "Take-profit", "trail": "Trailing", "trail_arm": "Trail arm", "bias": "Bias",
     "timeframe": "Timeframe", "recenter": "Re-center",
@@ -269,6 +270,9 @@ KNOB_HELP = {
               "more frequent little trades.",
     "size": "How much of the coin each order uses (e.g. <code>0.001</code> BTC). "
             "Bigger = bigger position and bigger risk.",
+    "anchor": "Where to put the grid's middle. <b>Smart</b> reads recent bars and leans "
+              "toward the average — so it won't buy the top / sell the bottom. <b>Now</b> "
+              "centers on the current price.",
     "leverage": "Multiplies your position size <b>and</b> risk. <b>x1</b> = no leverage "
                 "(safest); <b>x10</b> = 10× exposure.",
     "max_inventory": "Safety cap on net position size. <b>0 = auto</b> (≈3× the grid). "
@@ -295,6 +299,7 @@ KNOB_PRESETS: dict[str, list[tuple[str, str]]] = {
     "band": [("±0.5%", "0.5"), ("±1%", "1"), ("±2%", "2"), ("±5%", "5")],
     "levels": [("6", "6"), ("10", "10"), ("20", "20"), ("50", "50")],
     "size": [("0.001", "0.001"), ("0.005", "0.005"), ("0.01", "0.01"), ("0.05", "0.05")],
+    "anchor": [("🧠 Smart (recent avg)", "mean"), ("Current price", "now")],
     "leverage": [("x1", "1"), ("x5", "5"), ("x10", "10"), ("x15", "15"), ("x20", "20"), ("x25", "25")],
     "bias": [("Neutral", "neutral"), ("Long", "long"), ("Short", "short")],
     "timeframe": [("1m", "1m"), ("5m", "5m"), ("15m", "15m"), ("1h", "1h"), ("4h", "4h"), ("1d", "1d")],

@@ -111,6 +111,41 @@ async def test_margin_pct_is_of_available_margin_not_equity():
 
 
 @pytest.mark.asyncio
+async def test_center_mean_leans_toward_recent_average_not_the_live_top():
+    # Live price 100 but the last 200 bars averaged 98 → price sits at the range TOP.
+    # 'mean' center clamps to ±band of mid, so the grid shifts DOWN (into the range)
+    # instead of centering on the top. band 1% → center clamps to 99 → [98.01, 99.99].
+    ex = FakeExchange({"mid": "100", "tick": "0.01", "closes": ["98"] * 200, "equity": "100000"})
+    svc = AppService(client_factory=lambda _u: ex)
+    c = await _client(build_worker_app(svc, "0"))
+    try:
+        r = await c.post("/v1/grids", headers={"X-User-Id": "7"},
+                         json={"market": "BTCUSDT", "settings": {"band": "1", "levels": "4",
+                               "size": "0.001", "anchor": "mean"}})
+        assert r.status == 200
+        b = await r.json()
+        assert Decimal(b["upper"]) < Decimal("100")          # grid sits below the live top
+        assert Decimal(b["lower"]) == Decimal("98.01") and Decimal(b["upper"]) == Decimal("99.99")
+    finally:
+        await c.close()
+
+
+@pytest.mark.asyncio
+async def test_center_now_stays_symmetric_on_the_live_price():
+    ex = FakeExchange({"mid": "100", "tick": "0.01", "closes": ["98"] * 200, "equity": "100000"})
+    svc = AppService(client_factory=lambda _u: ex)
+    c = await _client(build_worker_app(svc, "0"))
+    try:
+        r = await c.post("/v1/grids", headers={"X-User-Id": "7"},
+                         json={"market": "BTCUSDT", "settings": {"band": "1", "levels": "4",
+                               "size": "0.001", "anchor": "now"}})
+        b = await r.json()
+        assert Decimal(b["lower"]) == Decimal("99") and Decimal(b["upper"]) == Decimal("101")
+    finally:
+        await c.close()
+
+
+@pytest.mark.asyncio
 async def test_worker_rejects_unknown_template():
     svc = AppService(client_factory=lambda _u: FakeExchange({"mid": "100", "equity": "10000"}))
     c = await _client(build_worker_app(svc, "0"))

@@ -71,6 +71,13 @@ def _v_bias(raw: str) -> str:
     return v
 
 
+def _v_anchor(raw: str) -> str:
+    v = str(raw).strip().lower()
+    if v in ("now", "mean"):
+        return v
+    raise ValueError(f"center: choose 'mean' (recent average) or 'now' (current price), got {raw!r}")
+
+
 def _v_timeframe(raw: str) -> str:
     v = str(raw).strip().lower()
     if v in TF_ALIAS:
@@ -100,6 +107,7 @@ KNOBS: dict[str, tuple[str, object]] = {
     "band": ("1", _v_band),                  # ± percent around mid
     "levels": ("10", _v_levels),
     "size": ("0.001", _v_size),              # base qty per level
+    "anchor": ("mean", _v_anchor),           # center: recent mean (clamped) vs current price
     # risk
     "leverage": ("1", _v_leverage),
     "max_inventory": ("0", _v_quote("max_inventory")),   # 0 = auto from grid size
@@ -186,6 +194,11 @@ def merged(saved: dict | None, overrides: dict | None = None) -> dict[str, str]:
 
 def band_fraction(s: dict) -> Decimal:
     return Decimal(s["band"]) / 100
+
+
+def anchor_mode(s: dict) -> str:
+    """Where to center the grid: 'mean' (recent average, clamped) or 'now' (live mid)."""
+    return s.get("anchor", "mean")
 
 
 def grid_fields(s: dict) -> dict:

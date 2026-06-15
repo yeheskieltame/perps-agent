@@ -27,6 +27,14 @@ def test_round_numbers_render_plain_not_scientific():
     assert out == {"size": "100", "leverage": "20", "max_inventory": "1000"}
 
 
+def test_anchor_defaults_to_mean_and_validates():
+    assert prefs.merged(None)["anchor"] == "mean"            # smart center by default
+    assert prefs.anchor_mode({}) == "mean" and prefs.anchor_mode({"anchor": "now"}) == "now"
+    assert prefs.validate_updates({"anchor": "now"}) == {"anchor": "now"}
+    with pytest.raises(ValueError):
+        prefs.validate_updates({"anchor": "yesterday"})
+
+
 def test_unknown_key_and_bad_values_rejected():
     with pytest.raises(ValueError, match="unknown setting"):
         prefs.validate_updates({"banana": "1"})

@@ -24,6 +24,9 @@ class FakeExchange:
         self._step = Decimal(str(cfg.get("step", "0.001")))
         self._min = Decimal(str(cfg.get("min_order_size", "0.001")))
         self._equity = Decimal(str(cfg.get("equity", "10000")))
+        # Optional recent-close series for SENSE / grid-center tests (oldest→newest);
+        # defaults to a flat history at mid.
+        self._closes = [Decimal(str(c)) for c in cfg.get("closes", [])]
         self._orders: dict[str, Order] = {}
         self._positions: dict[str, Position] = {}
         self._fills: asyncio.Queue[Fill] = asyncio.Queue()
@@ -36,6 +39,10 @@ class FakeExchange:
 
     async def best_bid_ask(self, market: str) -> tuple[Decimal, Decimal]:
         return (self._mid - self._tick, self._mid + self._tick)
+
+    async def klines(self, market: str, interval: str = "1", limit: int = 60) -> list[Decimal]:
+        """Recent closes (oldest→newest). Uses the configured series, else flat at mid."""
+        return (self._closes or [self._mid] * limit)[-limit:]
 
     async def set_leverage(self, market: str, leverage: Decimal) -> None:
         self.leverage = Decimal(str(leverage))

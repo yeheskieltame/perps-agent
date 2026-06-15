@@ -123,7 +123,8 @@ async def disconnect(api, user_id: int) -> str:
 SETTING_GROUPS: list[tuple[str, list[tuple[str, str]]]] = [
     ("Grid shape", [("band", "± percent around price"),
                     ("levels", "grid levels"),
-                    ("size", "base qty per level")]),
+                    ("size", "base qty per level"),
+                    ("anchor", "center: smart (recent avg) or now")]),
     ("Risk", [("leverage", "1..100"),
               ("max_inventory", "net-position cap · 0 = auto"),
               ("max_drawdown", "loss cap, quote · 0 = off"),

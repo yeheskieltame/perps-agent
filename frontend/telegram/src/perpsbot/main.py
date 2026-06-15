@@ -451,17 +451,36 @@ async def cb_pos_close_ask(cb: CallbackQuery, callback_data: PosCB) -> None:
                 pos_confirm_kb(callback_data.market))
 
 
+async def _send_card(cb: CallbackQuery, data: dict | None) -> None:
+    """Render + send a PnL card photo; a render error never blocks the action."""
+    if data is None or not isinstance(cb.message, Message):
+        return
+    with contextlib.suppress(Exception):
+        await cb.message.answer_photo(
+            BufferedInputFile(pnlcard.render(data), filename="pnl.png"),
+            caption=commands.pnl_caption(data))
+
+
 @router.callback_query(PosCB.filter(F.action == "close_do"))
 async def cb_pos_close_do(cb: CallbackQuery, api: WorkerAPI, callback_data: PosCB) -> None:
     note, card = await commands.close_with_card(api, _uid(cb), callback_data.market)
     await cb.answer(note[:180])
-    if card is not None and isinstance(cb.message, Message):
-        with contextlib.suppress(Exception):    # a card must never block the close
-            await cb.message.answer_photo(
-                BufferedInputFile(pnlcard.render(card), filename="pnl.png"),
-                caption=commands.pnl_caption(card))
+    await _send_card(cb, card)
     text, rows = await commands.positions(api, _uid(cb))
     await _edit(cb, text, positions_kb(rows) if rows is not None else back_kb("positions"))
+
+
+@router.callback_query(PosCB.filter(F.action == "share"))
+async def cb_pos_share(cb: CallbackQuery, api: WorkerAPI, callback_data: PosCB) -> None:
+    """📸 — share the LIVE (unrealized) PnL of an open position, no close needed."""
+    await cb.answer("📸 PnL card")
+    card = None
+    with contextlib.suppress(Exception):
+        for p in await api.positions(_uid(cb)):
+            if p.get("market") == callback_data.market:
+                card = commands.position_card(p, live=True)
+                break
+    await _send_card(cb, card)
 
 
 @router.callback_query(PriceCB.filter())
@@ -548,10 +567,28 @@ async def cb_stop_ask(cb: CallbackQuery, callback_data: GridCB) -> None:
                 stop_confirm_kb(callback_data.iid))
 
 
+@router.callback_query(GridCB.filter(F.action == "share"))
+async def cb_grid_share(cb: CallbackQuery, api: WorkerAPI, callback_data: GridCB) -> None:
+    """📸 — share the LIVE total PnL (realized + unrealized) of a running grid."""
+    await cb.answer("📸 PnL card")
+    card = None
+    with contextlib.suppress(Exception):
+        d = await api.grid_detail(_uid(cb), callback_data.iid)
+        if d:
+            card = commands.grid_card(d, live=True)
+    await _send_card(cb, card)
+
+
 @router.callback_query(GridCB.filter(F.action == "stop_do"))
 async def cb_stop_do(cb: CallbackQuery, api: WorkerAPI, callback_data: GridCB) -> None:
+    card = None
+    with contextlib.suppress(Exception):       # snapshot the grid's PnL BEFORE stopping
+        d = await api.grid_detail(_uid(cb), callback_data.iid)
+        if d:
+            card = commands.grid_card(d, live=False)
     out = await commands.stop(api, _uid(cb), callback_data.iid)
     await cb.answer("🛑 Stopped")
+    await _send_card(cb, card)
     rows = await _safe_status(api, _uid(cb))
     await _edit(cb, out + "\n\n" + commands.render_status(rows), grids_kb(rows))
 

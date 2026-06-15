@@ -26,7 +26,7 @@ class PriceCB(CallbackData, prefix="pr"):
 
 
 class GridCB(CallbackData, prefix="g"):
-    action: str  # pause | stop_ask | stop_do
+    action: str  # detail | rename | edit | pause | stop_ask | stop_do | share
     iid: str
 
 
@@ -37,7 +37,7 @@ class SetCB(CallbackData, prefix="s"):
 
 
 class PosCB(CallbackData, prefix="po"):
-    action: str  # close_ask | close_do
+    action: str  # close_ask | close_do | share
     market: str
 
 
@@ -171,6 +171,7 @@ def grids_kb(rows: list[dict]) -> InlineKeyboardMarkup:
 def detail_kb(iid: str, running: bool) -> InlineKeyboardMarkup:
     """Per-grid actions: rename, edit (stop+relaunch), pause (if running), stop."""
     kb = InlineKeyboardBuilder()
+    kb.button(text="📸 Share PnL", callback_data=GridCB(action="share", iid=iid))
     kb.button(text="✏️ Rename", callback_data=GridCB(action="rename", iid=iid))
     kb.button(text="🛠 Edit", callback_data=GridCB(action="edit", iid=iid))
     if running:
@@ -199,7 +200,9 @@ def positions_kb(rows: list[dict]) -> InlineKeyboardMarkup:
     for r in rows:
         mkt = r["market"]
         kb.row(InlineKeyboardButton(text=f"❌ Close {mkt}",
-                                    callback_data=PosCB(action="close_ask", market=mkt).pack()))
+                                    callback_data=PosCB(action="close_ask", market=mkt).pack()),
+               InlineKeyboardButton(text="📸 PnL",
+                                    callback_data=PosCB(action="share", market=mkt).pack()))
     kb.row(_b("❌ Close all", "closeall_ask"), _b("🧹 Cancel all orders", "cancelall_ask"))
     kb.row(_b("🛑 Close everything", "panic_ask"))
     _menu_row(kb)

@@ -629,6 +629,27 @@ async def close_position(api, user_id: int, market: str) -> str:
     return f"❌ Closed your {market} position."
 
 
+def position_card(p: dict, *, live: bool) -> dict:
+    """PnL-card data for a position — live (unrealized, to share) or a realized close."""
+    base = _base_of(p.get("market", ""))
+    px = (f"Entry {_num(p.get('entry', '0'))}   ·   Mark {_num(p.get('mark', '0'))}" if live
+          else f"Entry {_num(p.get('entry', '0'))}    →    Exit {_num(p.get('mark', '0'))}")
+    return {"title": p.get("market", ""), "subtitle": p.get("side", ""),
+            "badge": "LIVE" if live else None, "currency": "USDT",
+            "pnl": p.get("pnl", "0"), "pnl_pct": p.get("pnl_pct", "0"),
+            "lines": [f"Qty   {_num(p.get('size', '0'))} {base}", px]}
+
+
+def grid_card(d: dict, *, live: bool) -> dict:
+    """PnL-card data for a grid — live (running, total PnL) or a realized stop."""
+    return {"title": d.get("name") or d.get("instance_id", ""), "subtitle": "GRID",
+            "badge": "LIVE" if live else None, "currency": "USDT",
+            "pnl": d.get("total_pnl", d.get("realized_pnl", "0")), "pnl_pct": d.get("pnl_pct", "0"),
+            "lines": [f"{d.get('market', '')}   ·   {d.get('fill_count', 0)} fills",
+                      f"Realized {_signed(d.get('realized_pnl', 0))} · "
+                      f"Unrealized {_signed(d.get('unrealized_pnl', 0))} USDT"]}
+
+
 async def close_with_card(api, user_id: int, market: str) -> tuple[str, dict | None]:
     """Snapshot the position's live PnL, then close it — so the caller can render a
     shareable PnL card. Returns (note, card_data | None if there was no position)."""
@@ -636,10 +657,7 @@ async def close_with_card(api, user_id: int, market: str) -> tuple[str, dict | N
     try:
         for p in await api.positions(user_id):
             if p.get("market") == market:
-                card = {"symbol": market, "side": p.get("side", ""), "qty": p.get("size", "0"),
-                        "base": _base_of(market), "entry": p.get("entry", "0"),
-                        "exit": p.get("mark", "0"), "pnl": p.get("pnl", "0"),
-                        "pnl_pct": p.get("pnl_pct", "0"), "currency": "USDT"}
+                card = position_card(p, live=False)
                 break
     except ApiError:
         pass
@@ -647,11 +665,13 @@ async def close_with_card(api, user_id: int, market: str) -> tuple[str, dict | N
 
 
 def pnl_caption(card: dict) -> str:
-    """One-line caption under the PnL card."""
-    tone = "🟢" if Decimal(str(card.get("pnl", "0"))) >= 0 else "🔴"
-    return (f"{tone} <b>{card.get('symbol')} {card.get('side')}</b> closed\n"
+    """One-line caption under the PnL card (works for positions and grids)."""
+    pnl = Decimal(str(card.get("pnl", "0")))
+    tone = "🟢" if pnl >= 0 else "🔴"
+    badge = card.get("badge") or ("WIN" if pnl >= 0 else "LOSS")
+    return (f"{tone} <b>{card.get('title')} {card.get('subtitle')}</b> · {badge}\n"
             f"PnL <b>{_signed(card.get('pnl', 0))} {card.get('currency', 'USDT')}</b> "
-            f"({_signed(card.get('pnl_pct', 0))}%) · {_num(card.get('qty', 0))} {card.get('base', '')}")
+            f"({_signed(card.get('pnl_pct', 0))}%)")
 
 
 async def close_all_positions(api, user_id: int) -> str:

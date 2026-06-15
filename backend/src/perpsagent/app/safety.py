@@ -1,5 +1,5 @@
 """Safety — circuit breaker, kill switch, risk caps. Mitigates volatility,
-liquidation, and runaway execution (BGA 'Strategy design & risk management').
+liquidation, and runaway execution (strategy design and risk management).
 
 The engine checks the breaker on every fill and on each monitor tick. When a cap
 is breached the breaker trips; the engine then cancels all orders and flattens

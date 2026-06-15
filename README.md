@@ -232,5 +232,5 @@ Built by Team PerpsAgent.
 - Pitch deck: [Google Slides](https://docs.google.com/presentation/d/1aGbb-JPlc4B1iTZ4cBTffXJDkangvEEqT0zNALIa0bE/edit?usp=sharing)
 - X: [@perpsagent](https://x.com/perpsagent)
 
-Track: Mantle AI Awakening, AI Trading and Strategy, BGA.
+Built for The Turing Test Hackathon 2026.
 </content>

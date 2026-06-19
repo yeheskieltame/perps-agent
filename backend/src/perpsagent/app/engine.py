@@ -21,7 +21,9 @@ from ..domain.grid import (
     _external_id, build_grid_orders, compute_paired_order, levels_for, plan_levels,
     quantize, quantize_qty,
 )
-from ..domain.models import EpisodeOutcome, Fill, GridConfig, GridState, Order, Side
+from ..domain.models import (
+    EpisodeOutcome, Fill, GridConfig, GridState, Order, OrderPlacementError, Side,
+)
 from ..domain.pnl import risk_adjusted
 from .safety import AccountGuard, CircuitBreaker, ProfitGuard
 
@@ -91,7 +93,16 @@ class GridEngine:
         self.tick = meta.tick_size
         # Align the order size to the venue's qty step + min, or every order is
         # rejected (an unaligned auto-size → RUNNING grid with zero resting orders).
-        self.cfg.order_size = quantize_qty(self.cfg.order_size, meta.step_size, meta.min_order_size)
+        requested_size = self.cfg.order_size
+        self.cfg.order_size = quantize_qty(requested_size, meta.step_size, meta.min_order_size)
+        # If the venue min bumped the size UP, an AUTO inventory cap (size×levels, set
+        # in prefs.build_guards from the pre-quantize size) would bound the wrong amount.
+        # Rescale it to what will actually rest so the breaker caps the REAL ladder.
+        # "auto" is detected by the exact size×levels identity (a user-set cap differs).
+        if (self.breaker is not None and requested_size > 0
+                and self.cfg.order_size != requested_size
+                and self.breaker.max_inventory == requested_size * self.cfg.levels):
+            self.breaker.max_inventory = self.cfg.order_size * self.cfg.levels
         try:
             await self.ex.set_leverage(self.cfg.market, self.cfg.leverage)  # enforce user choice
         except Exception as e:  # noqa: BLE001 — leverage is best-effort, never block trading
@@ -110,6 +121,21 @@ class GridEngine:
         self.levels = [quantize(p, self.tick) for p in plan_levels(self.cfg)]
         orders = build_grid_orders(self.cfg, self.levels, mid, self._gen, bias=self.bias)
         await self._place_many(orders)
+        # Never claim RUNNING on a grid that placed nothing. When every order is
+        # rejected (insufficient margin / below the venue's min order value) the old
+        # path left a "RUNNING" grid with zero resting orders and only a stdout log,
+        # so the user saw a live grid that never traded. Fail loudly so the launch
+        # path surfaces WHY (worker → Telegram).
+        if orders and not self._resting:
+            self.state = GridState.HALTED
+            self.exit_kind = "placement-rejected"
+            self.exit_reason = (
+                f"0/{len(orders)} orders accepted on {self.cfg.market} (size "
+                f"{self.cfg.order_size}) — every order was rejected, usually "
+                f"insufficient margin or below the venue's minimum order value. "
+                f"Add funds or pick a lower-priced market."
+            )
+            raise OrderPlacementError(self.exit_reason)
         self.state = GridState.RUNNING
         return orders
 

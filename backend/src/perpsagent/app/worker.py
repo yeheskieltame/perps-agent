@@ -24,7 +24,7 @@ from decimal import Decimal
 
 from aiohttp import web
 
-from ..domain.models import GridConfig, Spacing, Venue
+from ..domain.models import GridConfig, OrderPlacementError, Spacing, Venue
 from . import prefs
 from .service import AppService
 
@@ -189,6 +189,8 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
             raise web.HTTPUnauthorized(reason=_NO_CREDS) from None
         except PermissionError as e:
             raise web.HTTPConflict(reason=str(e)) from None
+        except OrderPlacementError as e:  # 0 orders rested — surface the reason, don't fake RUNNING
+            raise web.HTTPBadRequest(text=str(e)) from None
         return web.json_response({"instance_id": iid, "effective": knobs,
                                   "lower": str(cfg.lower), "upper": str(cfg.upper),
                                   "proofs": service.proofs(iid), "decision": service.decision(iid)})

@@ -7,6 +7,13 @@ from enum import Enum
 from typing import Optional
 
 
+class OrderPlacementError(RuntimeError):
+    """A grid launch placed ZERO orders on the venue — every order was rejected
+    (typically insufficient margin or below the venue's minimum order value).
+    Raised so the launch path surfaces WHY to the user instead of reporting a
+    RUNNING grid with no resting orders."""
+
+
 class Venue(str, Enum):
     BYBIT = "bybit"
     MANTLE_DEX = "mantle_dex"  # iZiSwap (default) — see docs.perpsagent.xyz

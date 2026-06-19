@@ -43,4 +43,8 @@ interface IStrategyLedger {
 
     function getCommitment(bytes32 instanceId) external view returns (Commitment memory);
     function getLatestAttestation(bytes32 instanceId) external view returns (Attestation memory);
+    /// @notice Number of attestations recorded for an instance (append-only history).
+    function getAttestationCount(bytes32 instanceId) external view returns (uint256);
+    /// @notice The i-th attestation in the append-only history (0 = first).
+    function getAttestationAt(bytes32 instanceId, uint256 index) external view returns (Attestation memory);
 }

@@ -1,7 +1,9 @@
 """Unit tests for MantleChainClient encoding/decoding (no chain needed)."""
 from decimal import Decimal
 
-from perpsagent.adapters.chain.client import _DetailMirror, _b32, _bps, _clip_i32, config_hash
+from perpsagent.adapters.chain.client import (
+    _DetailMirror, _b32, _bps, _clip_i32, _winrate_bps, config_hash,
+)
 from perpsagent.domain.models import GridConfig, RegimeFingerprint, Spacing, Venue
 from perpsagent.domain.regime import regime_key
 
@@ -22,6 +24,34 @@ def test_bps_and_clip_i32():
     assert _bps(0.8333) == 8333
     assert _clip_i32(10**12) == 2**31 - 1
     assert _clip_i32(-(10**12)) == -(2**31)
+
+
+def test_winrate_bps_clamps_to_valid_range():
+    assert _winrate_bps(0.66) == 6600
+    assert _winrate_bps(1.5) == 10_000   # never exceeds the on-chain uint32 / _MAX_BPS bound
+    assert _winrate_bps(-0.2) == 0       # never negative into a uint32 slot
+
+
+def test_config_hash_includes_bias():
+    # bias materially changes the strategy (symmetric vs long/short ladder), so it must
+    # be part of the pre-commitment hash — else two different strategies collide on-chain.
+    base = GridConfig("i1", Venue.MANTLE_DEX, "BTCUSDT", Decimal("99"), Decimal("101"), 10,
+                      Decimal("0.01"), Spacing.GEOMETRIC, bias=0)
+    longb = GridConfig("i1", Venue.MANTLE_DEX, "BTCUSDT", Decimal("99"), Decimal("101"), 10,
+                       Decimal("0.01"), Spacing.GEOMETRIC, bias=1)
+    assert config_hash(base) != config_hash(longb)
+
+
+def test_detail_mirror_preserves_bias(tmp_path):
+    # Recall used to reconstruct every config with bias=0; the mirror now round-trips it.
+    cfg = GridConfig("i1", Venue.MANTLE_DEX, "BTCUSDT", Decimal("99"), Decimal("101"), 10,
+                     Decimal("0.01"), Spacing.GEOMETRIC, bias=-1)
+    reg = RegimeFingerprint(0.2, 0.0, 0.0001, 0.02, 0.0)
+    path = str(tmp_path / "m.json")
+    ch = config_hash(cfg).hex()
+    _DetailMirror(path).put(ch, cfg, reg)
+    cfg2, _ = _DetailMirror(path).get(ch)
+    assert cfg2.bias == -1
 
 
 def test_b32_is_32_bytes():

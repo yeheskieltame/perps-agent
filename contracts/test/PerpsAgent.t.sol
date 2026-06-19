@@ -71,6 +71,23 @@ contract StrategyLedgerTest is Test {
         ledger.attest(id, 0, 10001, 0, bytes32(0));
         vm.stopPrank();
     }
+
+    function test_attestation_history_is_append_only() public {
+        bytes32 id = keccak256("hist-1");
+        vm.startPrank(agent);
+        ledger.commitStrategy(id, keccak256("c"));
+        ledger.attest(id, int256(100), 5000, int32(1000), keccak256("f1"));
+        ledger.attest(id, int256(-50), 4000, int32(-500), keccak256("f2")); // re-attest
+        vm.stopPrank();
+
+        assertEq(ledger.getAttestationCount(id), 2); // both preserved, not overwritten
+        assertEq(ledger.getAttestationAt(id, 0).realizedPnl, int256(100)); // first NOT erased
+        assertEq(ledger.getAttestationAt(id, 1).realizedPnl, int256(-50)); // second appended
+        assertEq(ledger.getLatestAttestation(id).realizedPnl, int256(-50)); // latest still works
+        assertEq(ledger.getLatestAttestation(id).count, 2);
+        vm.expectRevert(); // index past the end
+        ledger.getAttestationAt(id, 2);
+    }
 }
 
 contract StrategyMemoryTest is Test {

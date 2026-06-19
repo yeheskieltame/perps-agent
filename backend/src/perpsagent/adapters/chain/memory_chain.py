@@ -53,5 +53,5 @@ class MemoryChain:
 def _config_hash(cfg: GridConfig) -> str:
     import hashlib
 
-    raw = f"{cfg.market}|{cfg.lower}|{cfg.upper}|{cfg.levels}|{cfg.spacing.value}|{cfg.leverage}|{cfg.policy_version}"
+    raw = f"{cfg.market}|{cfg.lower}|{cfg.upper}|{cfg.levels}|{cfg.spacing.value}|{cfg.leverage}|{cfg.bias}|{cfg.policy_version}"
     return "0x" + hashlib.sha256(raw.encode()).hexdigest()

@@ -51,7 +51,7 @@ def config_hash(cfg: GridConfig) -> bytes:
         str(x)
         for x in (
             cfg.market, cfg.lower, cfg.upper, cfg.levels, cfg.spacing.value,
-            cfg.order_size, cfg.leverage, cfg.policy_version,
+            cfg.order_size, cfg.leverage, cfg.bias, cfg.policy_version,
         )
     )
     return keccak(text=canonical)
@@ -59,6 +59,13 @@ def config_hash(cfg: GridConfig) -> bytes:
 
 def _bps(x: float) -> int:
     return int(round(x * 10_000))
+
+
+def _winrate_bps(winrate: float) -> int:
+    """Winrate → bps, clamped to [0, 10_000]. The on-chain winrateBps is uint32 and
+    the ledger reverts above 10_000, so a garbage/out-of-range winrate must degrade,
+    not brick the (fire-then-confirm) attest tx on the close path."""
+    return _bps(max(0.0, min(1.0, winrate)))
 
 
 def _clip_i32(v: int) -> int:
@@ -97,7 +104,7 @@ class _DetailMirror:
                 "lower": str(cfg.lower), "upper": str(cfg.upper), "levels": cfg.levels,
                 "order_size": str(cfg.order_size), "spacing": cfg.spacing.value,
                 "leverage": str(cfg.leverage), "max_levels": cfg.max_levels,
-                "policy_version": cfg.policy_version,
+                "policy_version": cfg.policy_version, "bias": cfg.bias,
             },
             "regime": regime.__dict__,
         }
@@ -118,7 +125,7 @@ class _DetailMirror:
             lower=Decimal(c["lower"]), upper=Decimal(c["upper"]), levels=int(c["levels"]),
             order_size=Decimal(c["order_size"]), spacing=Spacing(c["spacing"]),
             leverage=Decimal(c["leverage"]), max_levels=int(c["max_levels"]),
-            policy_version=c["policy_version"],
+            policy_version=c["policy_version"], bias=int(c.get("bias", 0)),
         )
         return cfg, RegimeFingerprint(**e["regime"])
 
@@ -168,7 +175,7 @@ class MantleChainClient:
             self.ledger.functions.attest(
                 self._instance_b32(instance_id),
                 int(outcome.realized_pnl * _PNL_SCALE),
-                _bps(outcome.winrate),
+                _winrate_bps(outcome.winrate),
                 _clip_i32(_bps(outcome.risk_adjusted)),
                 _b32(outcome.fills_merkle_root or "0x" + "00" * 32),
             )
@@ -182,7 +189,7 @@ class MantleChainClient:
                 _b32(regime_key(record.regime)),
                 ch,
                 int(record.outcome.realized_pnl * _PNL_SCALE),
-                _bps(record.outcome.winrate),
+                _winrate_bps(record.outcome.winrate),
                 _clip_i32(_bps(record.outcome.risk_adjusted)),
                 bool(record.outcome.is_backtest),
             )

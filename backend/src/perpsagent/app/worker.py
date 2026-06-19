@@ -24,6 +24,7 @@ from decimal import Decimal
 
 from aiohttp import web
 
+from ..domain.grid import quantize_qty
 from ..domain.models import GridConfig, OrderPlacementError, Spacing, Venue
 from . import prefs
 from .service import AppService
@@ -89,6 +90,7 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
         try:
             bal = await service.balance(user_id)
             m = await service.market_info(user_id, market)
+            meta = await service.market_meta(user_id, market)
         except KeyError:
             raise web.HTTPUnauthorized(reason=_NO_CREDS) from None
         except PermissionError as e:
@@ -104,6 +106,19 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
         size = prefs.grid_size(template, margin_q, m.mid)
         if size <= 0:
             raise web.HTTPBadRequest(reason="margin/balance too low to size this grid")
+        # The venue's minimum order qty can bump the per-level size UP (quantize_qty);
+        # when it does, the grid's REAL margin can exceed the balance and every order is
+        # rejected — a RUNNING grid with zero orders. Catch it HERE (before the on-chain
+        # commit) against the venue-aligned size, with a message the bot shows verbatim.
+        aligned = quantize_qty(size, meta.step_size, meta.min_order_size)
+        lev = Decimal(tpl["leverage"]) or Decimal(1)
+        need = aligned * int(tpl["levels"]) * Decimal(m.mid) / lev
+        if need > free:
+            raise web.HTTPBadRequest(text=(
+                f"{market}: minimum order is {meta.min_order_size}, so the smallest grid needs "
+                f"~{need.quantize(Decimal('0.01'))} {bal.currency} margin "
+                f"({aligned} x {tpl['levels']} levels @ {lev}x) but only "
+                f"{free.quantize(Decimal('0.01'))} is free. Add funds or pick a lower-priced market."))
         mid = Decimal(m.mid)
         band = Decimal(tpl["band"]) / 100
         return {

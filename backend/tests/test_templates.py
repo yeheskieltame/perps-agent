@@ -186,6 +186,23 @@ async def test_auto_neutral_when_ranging_and_pinned_bias_respected():
 
 
 @pytest.mark.asyncio
+async def test_worker_rejects_grid_too_small_for_min_order():
+    # The reported incident: 5.42 USDT on BTCUSDT. The venue minimum order (~0.001 BTC)
+    # costs far more margin than the whole balance, so every order would be rejected.
+    # Catch it at create time with a clear message, not a fake RUNNING grid.
+    svc = AppService(client_factory=lambda _u: FakeExchange(
+        {"mid": "65000", "equity": "5.42", "min_order_size": "0.001", "step": "0.001"}))
+    c = await _client(build_worker_app(svc, "0"))
+    try:
+        r = await c.post("/v1/grids", headers={"X-User-Id": "7"},
+                         json={"market": "BTCUSDT", "template": "safe"})
+        assert r.status == 400
+        assert "minimum order" in (await r.text()).lower()
+    finally:
+        await c.close()
+
+
+@pytest.mark.asyncio
 async def test_worker_rejects_unknown_template():
     svc = AppService(client_factory=lambda _u: FakeExchange({"mid": "100", "equity": "10000"}))
     c = await _client(build_worker_app(svc, "0"))

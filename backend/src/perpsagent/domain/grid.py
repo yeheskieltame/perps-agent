@@ -98,14 +98,6 @@ def build_grid_orders(cfg: GridConfig, levels: list[Decimal], mid: Decimal, nonc
     return orders
 
 
-def parse_level(external_id: str) -> int:
-    # grid-{instance}-L{level}-{nonce}
-    for part in external_id.split("-"):
-        if part.startswith("L") and part[1:].isdigit():
-            return int(part[1:])
-    raise ValueError(f"cannot parse level from external_id: {external_id}")
-
-
 def compute_paired_order(cfg: GridConfig, levels: list[Decimal], fill_level: int, fill_side: Side, nonce: int) -> Order | None:
     """On a BUY fill at level i, place a SELL one level up (i+1); on a SELL fill
     at level j, place a BUY one level down (j-1). Returns None at the boundary."""

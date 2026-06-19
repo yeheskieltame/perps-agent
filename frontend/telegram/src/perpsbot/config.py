@@ -10,6 +10,9 @@ class BotSettings(BaseSettings):
 
     token: str = ""                          # @BotFather token (required to run)
     api_url: str = "http://127.0.0.1:9000"   # worker (dev) or gateway (prod)
+    worker_token: str = ""                   # shared secret sent as X-Internal-Token to the
+                                             # worker/gateway (must match PERPSAGENT_INTERNAL_TOKEN);
+                                             # empty = none (loopback dev). Never commit it.
     allowlist: str = ""                      # comma-separated user ids; empty = allow all (dev)
     markets: str = "BTCUSDT,ETHUSDT,SOLUSDT,MNTUSDT"  # dashboard quick-pick buttons
     # grid defaults live BACKEND-side now (per-user /settings — backend app/prefs.py)

@@ -796,7 +796,7 @@ async def wiz_confirm(cb: CallbackQuery, api: WorkerAPI, state: FSMContext, bot:
 # ── runner ───────────────────────────────────────────────────────────────────
 
 async def _run(settings: BotSettings) -> None:
-    api = WorkerAPI(settings.api_url)
+    api = WorkerAPI(settings.api_url, settings.worker_token)
     bot = Bot(settings.token, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher(api=api, settings=settings, storage=MemoryStorage())
     allow = Allowlist(settings.allowed_ids())

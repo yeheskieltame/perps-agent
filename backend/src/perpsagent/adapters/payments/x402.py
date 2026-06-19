@@ -98,6 +98,7 @@ class X402Gateway:
         settler_key: str | None = None,
         native: bool = False,
         rpc_url: str | None = None,
+        nonce_store=None,
     ) -> None:
         self.pay_to = pay_to
         self.asset = asset
@@ -114,6 +115,10 @@ class X402Gateway:
         self.native = native
         self.rpc_url = rpc_url
         self._used_nonces: set[str] = set()
+        # Durable replay guard (optional): a store exposing `async claim_nonce(key)->bool`
+        # (True if newly claimed). The in-memory set only covers ONE process lifetime;
+        # the store makes a spent payment unreplayable across restarts and workers.
+        self._nonce_store = nonce_store
 
     # ---- challenge ----
 
@@ -230,12 +235,31 @@ class X402Gateway:
     async def verify_native(self, payment: dict, req: dict) -> tuple[bool, str]:
         return await asyncio.to_thread(self._verify_native_sync, payment, req)
 
+    def _nonce_key(self, payment: dict) -> str | None:
+        """The replay key for a payment: txHash (native) or from:nonce (exact)."""
+        payload = payment.get("payload", {}) or {}
+        if payment.get("scheme") == SCHEME_NATIVE:
+            tx = str(payload.get("txHash") or payload.get("transaction") or "")
+            return tx.lower() or None
+        auth = payload.get("authorization") or {}
+        frm, nonce = auth.get("from"), auth.get("nonce")
+        return f"{str(frm).lower()}:{nonce}" if frm and nonce is not None else None
+
     async def verify(self, payment: dict, req: dict) -> tuple[bool, str]:
         if self.native:
-            return await self.verify_native(payment, req)
-        if self.facilitator_url:
-            return await self._facilitator("verify", payment, req)
-        return self.verify_local(payment, req)
+            ok, info = await self.verify_native(payment, req)
+        elif self.facilitator_url:
+            ok, info = await self._facilitator("verify", payment, req)
+        else:
+            ok, info = self.verify_local(payment, req)
+        # Cross-process / cross-restart replay guard: the in-memory set only protects
+        # one process. With a durable nonce store wired, claim the nonce/txHash there
+        # too — a spent payment can't be replayed after a restart or on another worker.
+        if ok and self._nonce_store is not None:
+            key = self._nonce_key(payment)
+            if key and not await self._nonce_store.claim_nonce(key):
+                return False, "nonce/tx already used (replay)"
+        return ok, info
 
     # ---- settlement ----
 

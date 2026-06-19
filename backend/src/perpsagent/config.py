@@ -62,6 +62,10 @@ class Settings(BaseSettings):
                                     # for a multi-host gateway deploy behind a firewall/private net.
     gateway_port: int = 8080      # gateway HTTP port
     shard_urls: str = ""          # gateway routing map, JSON {"0":"http://host:9000", ...}
+    internal_token: str = ""      # shared secret the bot/gateway must send as X-Internal-Token.
+                                  # Empty = no internal auth (loopback dev). SET IT in any deploy
+                                  # where the worker/gateway port is reachable beyond loopback, so a
+                                  # forged X-User-Id alone can't act as a user (never commit it).
 
     # Builder fee (monetization #1, docs.perpsagent.xyz). A flat fee settled ON-CHAIN
     # from the operator's Vault bond to the treasury on each closed episode — "charge

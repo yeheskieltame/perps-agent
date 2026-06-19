@@ -17,8 +17,9 @@ class ApiError(Exception):
 
 
 class WorkerAPI:
-    def __init__(self, base_url: str) -> None:
+    def __init__(self, base_url: str, token: str = "") -> None:
         self._base = base_url.rstrip("/")
+        self._token = token  # X-Internal-Token shared secret (empty = none, loopback dev)
         self._session = None  # lazy aiohttp.ClientSession
 
     async def _req(self, method: str, path: str, user_id: int | None = None,
@@ -28,6 +29,8 @@ class WorkerAPI:
         if self._session is None:
             self._session = aiohttp.ClientSession()
         headers = {"X-User-Id": str(user_id)} if user_id is not None else {}
+        if self._token:
+            headers["X-Internal-Token"] = self._token
         async with self._session.request(method, self._base + path, json=body,
                                          headers=headers) as r:
             if r.status != 200:

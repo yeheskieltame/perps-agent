@@ -19,6 +19,7 @@ X-User-Id is trusted input: terminate auth at the gateway/ingress.
 """
 from __future__ import annotations
 
+import hmac
 import uuid
 from decimal import Decimal
 
@@ -69,8 +70,22 @@ _NO_CREDS = "no venue credentials — connect your API keys first"
 _FAUCET_URL = "https://faucet.sepolia.mantle.xyz"  # Mantle Sepolia testnet MNT faucet
 
 
-def build_worker_app(service: AppService, node: str, creds=None, wallet=None) -> web.Application:
-    app = web.Application()
+def build_worker_app(service: AppService, node: str, creds=None, wallet=None,
+                     internal_token: str = "") -> web.Application:
+    middlewares = []
+    if internal_token:
+        @web.middleware
+        async def _require_token(request: web.Request, handler):
+            # Defense-in-depth for the X-User-Id trust model: when the worker is
+            # reachable beyond loopback it must also require a shared secret from the
+            # bot/gateway, so a forged X-User-Id alone can't act as a user. /healthz
+            # stays open for liveness probes; constant-time compare avoids a timing leak.
+            if request.path != "/healthz" and not hmac.compare_digest(
+                    request.headers.get("X-Internal-Token", ""), internal_token):
+                raise web.HTTPUnauthorized(reason="missing or bad X-Internal-Token")
+            return await handler(request)
+        middlewares.append(_require_token)
+    app = web.Application(middlewares=middlewares)
 
     async def healthz(_request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "node": node})
@@ -522,7 +537,8 @@ def main() -> None:
     async def _cleanup(_app):
         await service.drain()  # let fire-then-confirm attest/memory writes land
 
-    app = build_worker_app(service, s.shard_node, creds=creds_admin, wallet=wallet_admin)
+    app = build_worker_app(service, s.shard_node, creds=creds_admin, wallet=wallet_admin,
+                           internal_token=s.internal_token)
     app.on_startup.append(_startup)
     app.on_cleanup.append(_cleanup)
     print(f"[worker {s.shard_node}/{s.shard_count}] serving on {s.worker_host}:{s.worker_port}")

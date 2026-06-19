@@ -157,6 +157,16 @@ def main() -> None:
     from ..config import Settings
 
     s = Settings()
+    # Durable replay guard for spent payments (survives restarts + shared across
+    # workers) — same store the engine plane uses.
+    if s.postgres_dsn:
+        from ..adapters.store.postgres_store import PostgresStore
+
+        nonce_store = PostgresStore(s.postgres_dsn)
+    else:
+        from ..adapters.store.sqlite_store import SqliteStore
+
+        nonce_store = SqliteStore(s.store_db_path)
     gateway = X402Gateway(
         pay_to=s.x402_pay_to or "0x" + "00" * 20,
         # Native MNT: pay the gas token directly, verified on-chain via the Mantle RPC.
@@ -168,6 +178,7 @@ def main() -> None:
         facilitator_url=s.x402_facilitator_url or None,
         native=s.x402_native,
         rpc_url=s.mantle_rpc or None,
+        nonce_store=nonce_store,
     )
     cache: CachePort | None = None
     if s.redis_url:  # shared cache across replicas

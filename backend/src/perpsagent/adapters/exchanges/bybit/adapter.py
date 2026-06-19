@@ -22,7 +22,9 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, AsyncIterator, Sequence
 
 from ....domain.grid import parse_external_id
-from ....domain.models import BalanceView, Fill, MarketMeta, Order, Position, Side
+from ....domain.models import (
+    BalanceView, Fill, MarketMeta, Order, Position, Side, StreamAuthError,
+)
 from .throttle import RateLimiter, is_retryable
 
 _BATCH_MAX = 20  # Bybit v5 create-batch cap (orders per request)
@@ -223,9 +225,10 @@ class BybitExchange:
             body = {"category": self._category,
                     "request": [{"symbol": market, "orderLinkId": o.external_id} for o in chunk]}
             resp = await self._request("POST", "/v5/order/cancel-batch", json.dumps(body, separators=(",", ":")))
-            if int(resp.get("retCode", 0) or 0) != 0:  # whole batch rejected
-                print(f"  ! batch cancel failed: {resp.get('retCode')} {resp.get('retMsg')}")
-                continue
+            if int(resp.get("retCode", 0) or 0) != 0:  # whole batch rejected — raise so the
+                # caller (engine._cancel_own) does NOT re-lay a grid over orders that may still
+                # be live. Per-order rejects below are benign (an order that just filled).
+                raise RuntimeError(f"batch cancel failed: {resp.get('retCode')} {resp.get('retMsg')}")
             codes = (resp.get("retExtInfo") or {}).get("list") or []
             for i, o in enumerate(chunk):
                 code = codes[i].get("code") if i < len(codes) and isinstance(codes[i], dict) else 0
@@ -236,8 +239,13 @@ class BybitExchange:
         await self._post("/v5/order/cancel-all", {"category": self._category, "symbol": market})
 
     async def flatten(self, market: str) -> None:
-        """Emergency exit: market-close any open position on `market` (reduce-only)."""
+        """Emergency exit: market-close any open position on `market` (reduce-only).
+        Sends positionIdx so a hedge-mode close isn't rejected, then re-reads the
+        position and RAISES if anything is still open — a reduce-only that silently
+        no-ops must not be mistaken for a clean flatten (the engine books realized
+        PnL only on a flatten that lands, and retries one that raises)."""
         res = await self._get("/v5/position/list", {"category": self._category, "settleCoin": "USDT"})
+        closed_any = False
         for p in res.get("list", []):
             if p.get("symbol") != market:
                 continue
@@ -245,11 +253,19 @@ class BybitExchange:
             if size == 0:
                 continue
             close_side = "Sell" if p.get("side") == "Buy" else "Buy"
-            await self._post(
-                "/v5/order/create",
-                {"category": self._category, "symbol": market, "side": close_side,
-                 "orderType": "Market", "qty": str(size), "reduceOnly": True},
-            )
+            body = {"category": self._category, "symbol": market, "side": close_side,
+                    "orderType": "Market", "qty": str(size), "reduceOnly": True}
+            idx = p.get("positionIdx")
+            if idx is not None:  # hedge mode rejects a reduce-only without the side's index
+                body["positionIdx"] = idx
+            await self._post("/v5/order/create", body)
+            closed_any = True
+        if closed_any:  # verify the close actually flattened — don't trust a 200 alone
+            chk = await self._get("/v5/position/list", {"category": self._category, "settleCoin": "USDT"})
+            rem = sum((Decimal(q.get("size") or "0") for q in chk.get("list", [])
+                       if q.get("symbol") == market), Decimal(0))
+            if rem != 0:
+                raise RuntimeError(f"flatten incomplete: {rem} still open on {market}")
 
     async def open_orders(self, market: str) -> Sequence[Order]:
         res = await self._get("/v5/order/realtime", {"category": self._category, "symbol": market})
@@ -312,7 +328,7 @@ class BybitExchange:
             try:
                 sess = await self._sess()
                 async with sess.ws_connect(self._ws_url, heartbeat=20) as ws:
-                    await self._ws_auth(ws)
+                    await self._ws_auth(ws)  # raises StreamAuthError on a permanent rejection
                     await ws.send_json({"op": "subscribe", "args": ["execution"]})
                     backoff = 1
                     for fill in await self._backfill():
@@ -332,6 +348,8 @@ class BybitExchange:
                                 yield fill
             except asyncio.CancelledError:
                 raise
+            except StreamAuthError:
+                raise  # permanent (bad key / no permission) — never reconnect into a dead stream
             except Exception:
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30)
@@ -394,9 +412,25 @@ class BybitExchange:
         return out
 
     async def _ws_auth(self, ws) -> None:
+        import aiohttp
+
         expires = int((time.time() + 10) * 1000)
         sign = hmac.new(self._secret.encode(), f"GET/realtime{expires}".encode(), hashlib.sha256).hexdigest()
         await ws.send_json({"op": "auth", "args": [self._key, expires, sign]})
+        # Confirm the auth ack. A bad key / missing derivatives permission never
+        # self-heals, so surface it instead of looping into a fill-less stream that
+        # leaves the engine blind to inventory. A missing ack (timeout) is treated as
+        # transient — the reconnect loop retries it.
+        try:
+            msg = await ws.receive(timeout=10)
+        except asyncio.TimeoutError:
+            return
+        if msg.type is aiohttp.WSMsgType.TEXT:
+            data = json.loads(msg.data)
+            if data.get("op") == "auth" and not data.get("success", True):
+                raise StreamAuthError(
+                    f"Bybit WS auth rejected ({data.get('ret_msg') or data}) — check the API "
+                    f"key has derivatives + read permission and isn't IP-restricted")
 
     async def close(self) -> None:
         if self._session is not None:

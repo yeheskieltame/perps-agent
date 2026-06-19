@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import asyncio
 
-from ..domain.models import GridConfig
+from ..domain.models import GridConfig, StreamAuthError
 from .engine import GridEngine
 from .manager import GridManager
 
@@ -97,10 +97,16 @@ class UserSession:
             self._router = asyncio.create_task(self._route_fills())
 
     async def _route_fills(self) -> None:
-        async for fill in self.exchange.stream_fills():
-            engine = self.manager.get(fill.instance_id)
-            if engine is not None:  # ignore fills for instances this session doesn't own
-                await engine.handle_fill(fill)
+        try:
+            async for fill in self.exchange.stream_fills():
+                engine = self.manager.get(fill.instance_id)
+                if engine is not None:  # ignore fills for instances this session doesn't own
+                    await engine.handle_fill(fill)
+        except StreamAuthError as e:
+            # Permanent: the fill stream can't authenticate. The engine drives
+            # PnL/inventory/guards off fills, so a dead stream is real risk — fail
+            # loudly (the user must reconnect valid keys) rather than die silently.
+            print(f"  !!! user {self.user_id} fill stream DOWN — {e}")
 
     async def _cancel_router(self) -> None:
         if self._router is not None:

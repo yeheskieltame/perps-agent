@@ -140,17 +140,24 @@ class GridEngine:
         return orders
 
     async def _place(self, order: Order) -> None:
-        """Place an order with a globally-unique external_id. Venues reject a
-        reused orderLinkId even after cancel (Bybit err 110072), so a fresh id is
-        stamped on every placement. One rejected order is logged, never fatal —
-        it must not orphan the grid."""
-        self._oid += 1
-        order.external_id = _external_id(self.cfg.instance_id, order.level, self._oid)
-        try:
-            await self.ex.place_order(order)
-            self._resting[order.external_id] = order
-        except Exception as e:  # noqa: BLE001
-            print(f"  ! place {order.side.value} L{order.level} @ {order.price} failed: {e}")
+        """Place a paired take-profit with a globally-unique external_id (venues
+        reject a reused orderLinkId even after cancel — Bybit 110072 — so a fresh id
+        is stamped every attempt). The paired order IS the grid's exit for the level,
+        so a rejection is retried ONCE before giving up: a missing take-profit leaves
+        filled inventory with no resting exit (only the breaker then backstops it)."""
+        for attempt in (1, 2):
+            self._oid += 1
+            order.external_id = _external_id(self.cfg.instance_id, order.level, self._oid)
+            try:
+                await self.ex.place_order(order)
+                self._resting[order.external_id] = order
+                return
+            except Exception as e:  # noqa: BLE001
+                if attempt == 1:
+                    await asyncio.sleep(self._exit_retry_delay)
+                    continue
+                print(f"  !! paired {order.side.value} L{order.level} @ {order.price} NOT "
+                      f"placed after retry: {e} — exit for this level is missing")
 
     async def _place_many(self, orders: list[Order]) -> None:
         """Stamp globally-unique external_ids on a whole batch, then place it. Uses
@@ -270,7 +277,10 @@ class GridEngine:
         generation namespaces the new external_ids so they never collide."""
         self.state = GridState.REBALANCING
         try:
-            await self._cancel_own()
+            if not await self._cancel_own():
+                print(f"  ! recenter aborted: could not cancel the old grid on "
+                      f"{self.cfg.market} — leaving it resting rather than double-stacking")
+                return
             if self.bias_fn is not None:  # dynamic mode: re-read the regime each re-center
                 try:
                     new_bias = await self.bias_fn(self.bias)
@@ -329,31 +339,50 @@ class GridEngine:
         print(f"  ~ thinned {dropped} {growing.value} order(s): inventory {net} near cap {cap}")
         return [o for o in orders if o.side is not growing or id(o) in keep]
 
-    async def _cancel_own(self) -> None:
+    async def _cancel_own(self) -> bool:
         """Cancel only THIS instance's resting orders, so two grids sharing one
         market+account never wipe each other on a re-center or stop. (Emergency
         `_exit` still nukes the whole market on purpose — flatten closes the
         shared net position anyway.) Falls back to market-wide cancel_all when
-        the venue cannot enumerate open orders."""
-        self._resting.clear()  # everything of ours is being cancelled below
+        the venue cannot enumerate open orders.
+
+        Returns True when our book is clear on the venue (or there was nothing to
+        cancel), False when a WHOLE-batch cancel failed — the re-center caller must
+        then NOT re-lay a fresh grid on top of orders that may still be live (the old
+        code cleared local tracking up-front, which double-stacked the grid when the
+        cancel silently failed). Local tracking is cleared only after the venue call
+        returns without error."""
         try:
             resting = await self.ex.open_orders(self.cfg.market)
         except Exception as e:  # noqa: BLE001
             print(f"  ! open_orders failed ({e}) — falling back to cancel_all")
-            await self.ex.cancel_all(self.cfg.market)
-            return
+            try:
+                await self.ex.cancel_all(self.cfg.market)
+                self._resting.clear()
+                return True
+            except Exception as e2:  # noqa: BLE001
+                print(f"  ! cancel_all fallback failed ({e2}) — orders may still be live")
+                return False
         mine = [o for o in resting if o.instance_id == self.cfg.instance_id]
         if not mine:
-            return
+            self._resting.clear()
+            return True
         batch = getattr(self.ex, "cancel_orders", None)
         if batch is not None:  # venue batch endpoint: 1-2 round-trips for the lot
-            await batch(self.cfg.market, mine)
-            return
+            try:
+                await batch(self.cfg.market, mine)
+            except Exception as e:  # noqa: BLE001 — whole-batch cancel failed: keep tracking
+                print(f"  ! batch cancel failed ({e}) — not re-laying over possibly-live orders")
+                return False
+            self._resting.clear()
+            return True
         for o in mine:
             try:
                 await self.ex.cancel_order(self.cfg.market, o.order_id or o.external_id)
             except Exception as e:  # noqa: BLE001 — an order that just filled is fine
                 print(f"  ! cancel {o.external_id} failed: {e}")
+        self._resting.clear()
+        return True
 
     async def monitor(self) -> None:
         """Background loop: re-center on band-exit and enforce guards until stop."""

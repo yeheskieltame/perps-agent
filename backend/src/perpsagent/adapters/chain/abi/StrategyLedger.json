@@ -96,6 +96,81 @@
   },
   {
     "type": "function",
+    "name": "getAttestationAt",
+    "inputs": [
+      {
+        "name": "instanceId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "index",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "tuple",
+        "internalType": "struct IStrategyLedger.Attestation",
+        "components": [
+          {
+            "name": "realizedPnl",
+            "type": "int256",
+            "internalType": "int256"
+          },
+          {
+            "name": "winrateBps",
+            "type": "uint32",
+            "internalType": "uint32"
+          },
+          {
+            "name": "riskAdjBps",
+            "type": "int32",
+            "internalType": "int32"
+          },
+          {
+            "name": "fillsRoot",
+            "type": "bytes32",
+            "internalType": "bytes32"
+          },
+          {
+            "name": "attestedAt",
+            "type": "uint64",
+            "internalType": "uint64"
+          },
+          {
+            "name": "count",
+            "type": "uint32",
+            "internalType": "uint32"
+          }
+        ]
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
+    "name": "getAttestationCount",
+    "inputs": [
+      {
+        "name": "instanceId",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "getCommitment",
     "inputs": [
       {
@@ -585,6 +660,22 @@
     "type": "error",
     "name": "FailedCall",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "IndexOutOfRange",
+    "inputs": [
+      {
+        "name": "index",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "length",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ]
   },
   {
     "type": "error",

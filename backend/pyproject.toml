@@ -4,17 +4,19 @@ version = "0.0.1"
 description = "Perps Agent — a verifiable, self-improving grid-trading agent. Executes on Bybit; thinks, learns, and proves on Mantle."
 requires-python = ">=3.11"
 dependencies = [
-    "pydantic>=2",
-    "pydantic-settings>=2",
-    "aiohttp>=3.9",
-    "web3>=6",
-    "eth-account>=0.11",
+    # Capped below the next major (supply-chain: this code signs txs + handles keys,
+    # so a surprise major must not auto-install). Bounds include the tested versions.
+    "pydantic>=2,<3",
+    "pydantic-settings>=2,<3",
+    "aiohttp>=3.9,<4",
+    "web3>=6,<8",
+    "eth-account>=0.11,<1",
 ]
 
 [project.optional-dependencies]
-bybit = ["pybit>=5"]
-postgres = ["asyncpg>=0.29", "cryptography>=42"]  # durable multi-tenant store + encrypted credentials
-redis = ["redis>=5"]                              # shared alpha cache across replicas
+bybit = ["pybit>=5,<6"]
+postgres = ["asyncpg>=0.29,<1", "cryptography>=42,<49"]  # durable multi-tenant store + encrypted credentials
+redis = ["redis>=5,<9"]                                  # shared alpha cache across replicas
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "ruff>=0.5", "mypy>=1.10"]
 
 [build-system]

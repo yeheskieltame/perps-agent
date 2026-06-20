@@ -4,6 +4,7 @@ reply string (HTML). No aiogram imports, so every path is unit-testable offline.
 from __future__ import annotations
 
 from decimal import Decimal
+from html import escape
 
 from .api import ApiError
 
@@ -70,7 +71,7 @@ def _proof_line(proofs: dict | None, kind: str, prefix: str) -> str:
 def _err(e: ApiError) -> str:
     if e.status == 401:
         return "🔑 Not connected — link your Bybit API keys first with /connect."
-    return f"⚠️ Backend refused ({e.status}): {e.detail or 'no detail'}"
+    return f"⚠️ Backend refused ({e.status}): {escape(e.detail or 'no detail')}"
 
 
 def parse_env_choice(text: str) -> bool | None:
@@ -209,7 +210,7 @@ async def menu_snapshot(api, user_id: int) -> str:
         lines.append(f"\n📊 <b>Positions</b> · {len(grids)} grid(s)")
         for g in grids[:6]:
             icon = _STATE_ICON.get(g["state"], "•")
-            label = g.get("name") or g["instance_id"]
+            label = escape(g.get("name") or g["instance_id"])
             lines.append(f"{icon} <b>{label}</b>\n"
                          f"     {g['state']} · pnl {g['realized_pnl']} · fills {g['fill_count']}")
     else:
@@ -224,7 +225,7 @@ def render_history(rows: list[dict]) -> str:
     lines = ["📜 <b>History</b> — recently closed grids"]
     for r in rows:
         wr = round(float(r.get("winrate", 0)) * 100)
-        label = r.get("name") or r["instance_id"]
+        label = escape(r.get("name") or r["instance_id"])
         lines.append(f"• <b>{label}</b> · {r.get('market', '?')}\n"
                      f"     pnl <b>{r.get('realized_pnl', '0')}</b> · fills {r.get('fill_count', 0)} · win {wr}%")
     return "\n".join(lines)
@@ -247,7 +248,7 @@ def _base_of(market: str) -> str:
 def render_detail(d: dict) -> str:
     """Full single-grid view: headline PnL (USDT + %), position, setup, proofs."""
     icon = _STATE_ICON.get(d.get("state"), "•")
-    name = d.get("name") or d["instance_id"]
+    name = escape(d.get("name") or d["instance_id"])
     total = d.get("total_pnl", d.get("realized_pnl", "0"))
     tone = "🟢" if Decimal(str(total)) >= 0 else "🔴"
     lines = [
@@ -315,7 +316,7 @@ def render_status(rows: list[dict]) -> str:
     lines = ["📊 <b>Your grids</b> — tap one for details / edit"]
     for r in rows:
         icon = _STATE_ICON.get(r["state"], "•")
-        label = r.get("name") or r["instance_id"]
+        label = escape(r.get("name") or r["instance_id"])
         lines.append(f"{icon} <b>{label}</b> — {r['state']} · pnl {r['realized_pnl']} · fills {r['fill_count']}")
     return "\n".join(lines)
 
@@ -393,7 +394,7 @@ async def create_template_result(api, user_id: int, market: str, template: str,
     except ApiError as e:
         if e.status == 401:
             return ("🔑 Connect your Bybit keys first with /connect.", None)
-        return (f"❌ {e.detail or 'launch failed'}", None)
+        return (f"❌ {escape(e.detail or 'launch failed')}", None)
     iid, eff = resp["instance_id"], resp.get("effective", {})
     text = (f"✅ <b>Grid launched</b> · {_STRATEGY_LABEL.get(template, '')}\n<code>{iid}</code>\n"
             f"{market.upper()} [{resp.get('lower', '?')}, {resp.get('upper', '?')}] · "
@@ -409,7 +410,7 @@ async def create_grid_result(api, user_id: int, market: str) -> tuple[str, str |
     try:
         resp = await api.create_grid(user_id, market.upper())
     except ApiError as e:
-        return (f"❌ {e.detail or 'invalid grid'}" if e.status == 400 else _err(e)), None
+        return (f"❌ {escape(e.detail or 'invalid grid')}" if e.status == 400 else _err(e)), None
     iid, eff = resp["instance_id"], resp.get("effective", {})
     text = (f"✅ <b>Grid launched</b>\n<code>{iid}</code>\n"
             f"{market.upper()} [{resp.get('lower', '?')}, {resp.get('upper', '?')}] · "
@@ -460,7 +461,7 @@ async def set_setting(api, user_id: int, key: str, val: str) -> tuple[str, dict 
     try:
         resp = await api.put_settings(user_id, {key: val})
     except ApiError as e:
-        return (f"❌ {e.detail or e.status}", None)
+        return (f"❌ {escape(str(e.detail or e.status))}", None)
     return (f"{key} → {val} ✓", resp.get("settings", {}))
 
 
@@ -513,7 +514,7 @@ async def grid(api, user_id: int, args: str) -> str:
         resp = await api.create_grid(user_id, market, overrides or None)
     except ApiError as e:
         if e.status == 400:
-            return f"❌ {e.detail or 'invalid grid arguments'}\n{GRID_USAGE}"
+            return f"❌ {escape(e.detail or 'invalid grid arguments')}\n{GRID_USAGE}"
         return _err(e)
     iid, eff = resp["instance_id"], resp.get("effective", {})
     lines = ["✅ <b>Grid launched</b>", f"instance: <code>{iid}</code>"]

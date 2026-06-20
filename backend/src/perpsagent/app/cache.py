@@ -10,6 +10,7 @@ API caches response bodies, which are).
 from __future__ import annotations
 
 import time
+from collections import OrderedDict
 from typing import Any, Callable, Protocol
 
 
@@ -19,12 +20,19 @@ class CachePort(Protocol):
 
 
 class InProcessCache:
-    """Async CachePort, single-process TTL. `ttl_s <= 0` disables caching."""
+    """Async CachePort, single-process TTL + LRU bound. `ttl_s <= 0` disables caching.
 
-    def __init__(self, ttl_s: float, clock: Callable[[], float] = time.monotonic) -> None:
+    The cache key is `regime:{market}` / `recall:{market}` where `{market}` comes
+    from the request path; an unbounded dict would grow with every distinct (paid)
+    market string. `max_entries` caps it — least-recently-used entries are evicted —
+    so a flood of distinct markets can't grow memory without bound."""
+
+    def __init__(self, ttl_s: float, clock: Callable[[], float] = time.monotonic,
+                 max_entries: int = 2048) -> None:
         self.ttl = float(ttl_s)
         self._clock = clock
-        self._d: dict[str, tuple[float, Any]] = {}
+        self._max = max(1, int(max_entries))
+        self._d: OrderedDict[str, tuple[float, Any]] = OrderedDict()
 
     async def get(self, key: str) -> Any | None:
         entry = self._d.get(key)
@@ -34,8 +42,13 @@ class InProcessCache:
         if self.ttl <= 0 or (self._clock() - ts) > self.ttl:
             self._d.pop(key, None)
             return None
+        self._d.move_to_end(key)  # most-recently used
         return value
 
     async def put(self, key: str, value: Any) -> None:
-        if self.ttl > 0:
-            self._d[key] = (self._clock(), value)
+        if self.ttl <= 0:
+            return
+        self._d[key] = (self._clock(), value)
+        self._d.move_to_end(key)
+        while len(self._d) > self._max:
+            self._d.popitem(last=False)  # evict least-recently used

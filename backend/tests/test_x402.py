@@ -129,3 +129,46 @@ async def test_native_verify_rejects_bad_payments():
     assert (await g.verify(_native_payment("0xwrongto"), req))[0] is False
     assert (await g.verify(_native_payment("0xtoolow"), req))[0] is False
     assert (await g.verify(_native_payment("0xmissing"), req))[0] is False  # unknown tx
+
+
+# ---- durable replay guard: a spent payment can't be replayed after a restart ----
+
+class _MemNonceStore:
+    """A durable-style nonce store shared across gateway instances (simulates the DB)."""
+
+    def __init__(self):
+        self.keys: set[str] = set()
+
+    async def claim_nonce(self, key: str) -> bool:
+        if key in self.keys:
+            return False
+        self.keys.add(key)
+        return True
+
+
+@pytest.mark.asyncio
+async def test_persistent_store_blocks_replay_across_gateway_instances():
+    store = _MemNonceStore()
+    tx = "0x" + "11" * 32
+    g1 = _NativeGW(nonce_store=store)
+    g1.onchain[tx] = (PAY_TO, 50000, 1)
+    req = g1.requirements("r")
+    assert (await g1.verify(_native_payment(tx), req))[0] is True
+    # a fresh gateway (a restart / another worker) sharing the SAME durable store
+    g2 = _NativeGW(nonce_store=store)
+    g2.onchain[tx] = (PAY_TO, 50000, 1)
+    ok2, reason2 = await g2.verify(_native_payment(tx), req)
+    assert not ok2 and "replay" in reason2
+
+
+@pytest.mark.asyncio
+async def test_sqlite_claim_nonce_is_idempotent(tmp_path):
+    from perpsagent.adapters.store.sqlite_store import SqliteStore
+
+    s = SqliteStore(str(tmp_path / "t.db"))
+    try:
+        assert await s.claim_nonce("a:1") is True
+        assert await s.claim_nonce("a:1") is False   # replay blocked
+        assert await s.claim_nonce("a:2") is True
+    finally:
+        await s.close()

@@ -18,16 +18,37 @@ from typing import Awaitable, Callable, Protocol
 
 
 class CredentialCodec:
-    def __init__(self, master_key: str | bytes) -> None:
-        from cryptography.fernet import Fernet
+    """Seals per-user secrets with Fernet. `master_key` may be a SINGLE key or a
+    comma-separated list (newest first) to enable rotation via MultiFernet: writes
+    use the newest key, reads accept any listed key. Rotate by setting
+    PERPSAGENT_CRED_MASTER_KEY="<new>,<old>", re-sealing stored blobs with
+    `reseal()`, then dropping the old key."""
 
-        self._fernet = Fernet(master_key.encode() if isinstance(master_key, str) else master_key)
+    def __init__(self, master_key: str | bytes) -> None:
+        from cryptography.fernet import Fernet, MultiFernet
+
+        if isinstance(master_key, bytes):
+            raw_keys = [master_key]
+        else:
+            raw_keys = [k.strip() for k in master_key.split(",") if k.strip()]
+        fernets = [Fernet(k.encode() if isinstance(k, str) else k) for k in raw_keys]
+        if not fernets:
+            raise ValueError("CredentialCodec needs at least one master key")
+        # Single key → plain Fernet (unchanged behaviour); multiple → MultiFernet.
+        self._fernet = fernets[0] if len(fernets) == 1 else MultiFernet(fernets)
 
     def encrypt(self, creds: dict) -> bytes:
         return self._fernet.encrypt(json.dumps(creds, separators=(",", ":")).encode())
 
     def decrypt(self, token: bytes) -> dict:
         return json.loads(self._fernet.decrypt(token))
+
+    def reseal(self, token: bytes) -> bytes:
+        """Re-encrypt a token under the PRIMARY (newest) key — for migrating old
+        ciphertext during a key rotation. Identity when only one key is configured."""
+        from cryptography.fernet import MultiFernet
+
+        return self._fernet.rotate(token) if isinstance(self._fernet, MultiFernet) else token
 
     @staticmethod
     def generate_key() -> str:

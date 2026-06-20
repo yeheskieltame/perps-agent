@@ -50,9 +50,12 @@ def build_gateway_app(router, shard_urls: dict[str, str]) -> web.Application:
         url = base.rstrip("/") + request.rel_url.path
         body = await request.read()
         session = request.app[_SESSION]
+        fwd = {"X-User-Id": raw, "Content-Type": request.content_type}
+        token = request.headers.get("X-Internal-Token")  # pass the shared secret through to the worker
+        if token is not None:
+            fwd["X-Internal-Token"] = token
         async with session.request(
-            request.method, url, params=request.rel_url.query, data=body,
-            headers={"X-User-Id": raw, "Content-Type": request.content_type},
+            request.method, url, params=request.rel_url.query, data=body, headers=fwd,
         ) as resp:
             return web.Response(status=resp.status, body=await resp.read(),
                                 content_type=resp.content_type)

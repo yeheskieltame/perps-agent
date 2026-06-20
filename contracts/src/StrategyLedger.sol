@@ -24,6 +24,11 @@ contract StrategyLedger is Initializable, AccessControlUpgradeable, UUPSUpgradea
     struct LedgerStorage {
         mapping(bytes32 instanceId => Commitment) commitments;
         mapping(bytes32 instanceId => Attestation) attestations;
+        // Append-only history: every attest() is also pushed here, so a later
+        // re-attestation can't silently erase an earlier verified outcome — the full
+        // series stays on-chain (state, not just events) and any rewrite is auditable.
+        // Appended after existing members → upgrade-safe (ERC-7201 layout preserved).
+        mapping(bytes32 instanceId => Attestation[]) attestationHistory;
     }
 
     // keccak256(abi.encode(uint256(keccak256("perpsagent.storage.StrategyLedger")) - 1)) & ~bytes32(uint256(0xff))
@@ -37,6 +42,7 @@ contract StrategyLedger is Initializable, AccessControlUpgradeable, UUPSUpgradea
     error NotCommitted(bytes32 instanceId);
     error NotStrategyAgent(bytes32 instanceId, address caller);
     error InvalidBps(uint32 value);
+    error IndexOutOfRange(uint256 index, uint256 length);
 
     function _s() private pure returns (LedgerStorage storage $) {
         assembly {
@@ -91,6 +97,17 @@ contract StrategyLedger is Initializable, AccessControlUpgradeable, UUPSUpgradea
         unchecked {
             a.count += 1;
         }
+        // Preserve the full series on-chain — a re-attest appends, never erases.
+        $.attestationHistory[instanceId].push(
+            Attestation({
+                realizedPnl: realizedPnl,
+                winrateBps: winrateBps,
+                riskAdjBps: riskAdjBps,
+                fillsRoot: fillsRoot,
+                attestedAt: uint64(block.timestamp),
+                count: a.count
+            })
+        );
         emit OutcomeAttested(
             instanceId, msg.sender, realizedPnl, winrateBps, riskAdjBps, fillsRoot, uint64(block.timestamp)
         );
@@ -104,6 +121,18 @@ contract StrategyLedger is Initializable, AccessControlUpgradeable, UUPSUpgradea
     /// @inheritdoc IStrategyLedger
     function getLatestAttestation(bytes32 instanceId) external view returns (Attestation memory) {
         return _s().attestations[instanceId];
+    }
+
+    /// @inheritdoc IStrategyLedger
+    function getAttestationCount(bytes32 instanceId) external view returns (uint256) {
+        return _s().attestationHistory[instanceId].length;
+    }
+
+    /// @inheritdoc IStrategyLedger
+    function getAttestationAt(bytes32 instanceId, uint256 index) external view returns (Attestation memory) {
+        Attestation[] storage h = _s().attestationHistory[instanceId];
+        if (index >= h.length) revert IndexOutOfRange(index, h.length);
+        return h[index];
     }
 
     function _authorizeUpgrade(address newImplementation) internal override onlyRole(UPGRADER_ROLE) {}

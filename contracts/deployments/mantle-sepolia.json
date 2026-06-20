@@ -7,7 +7,7 @@
   "contracts": {
     "StrategyLedger": {
       "proxy": "0x128E925828952803E05157Ee4fEf54ac47cf1C88",
-      "implementation": "0xff5295499a6c1b7db32f151aef3615a24559d12a"
+      "implementation": "0x76cB3Dc37125b133b044894c2dECf2E7eB0Df353"
     },
     "StrategyMemory": {
       "proxy": "0xC26E112437e5B6d739232732c665a64eb14Dc519",

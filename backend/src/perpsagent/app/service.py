@@ -409,6 +409,12 @@ class AppService:
         bid, ask = await session.exchange.best_bid_ask(market)
         return MarketView(market=market, bid=str(bid), ask=str(ask), mid=str((bid + ask) / 2))
 
+    async def market_meta(self, user_id: int, market: str):
+        """Venue order constraints (tick / qty step / min order size) so the worker can
+        size and feasibility-check a grid without the UI touching an exchange SDK."""
+        session = await self._session(user_id)
+        return await session.exchange.market_meta(market)
+
     async def recent_closes(self, user_id: int, market: str, timeframe: str,
                             limit: int = 200) -> list:
         """Recent bar closes (oldest→newest) for sizing the grid CENTER off structure,

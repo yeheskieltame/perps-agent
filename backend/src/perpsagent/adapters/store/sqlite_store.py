@@ -53,6 +53,9 @@ CREATE INDEX IF NOT EXISTS idx_episodes_user ON episodes(user_id);
 CREATE TABLE IF NOT EXISTS grid_names (
     instance_id TEXT PRIMARY KEY, user_id INTEGER, name TEXT, updated_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS spent_payments (
+    key TEXT PRIMARY KEY, ts INTEGER
+);
 """
 _OPEN_STATES = ("INITIALIZING", "RUNNING", "REBALANCING")
 
@@ -306,6 +309,22 @@ class SqliteStore:
         with self._lock:
             self._conn.execute("DELETE FROM user_settings WHERE user_id=?", (user_id,))
             self._conn.commit()
+
+    # ---- x402 spent-payment replay guard ----
+
+    async def claim_nonce(self, key: str) -> bool:
+        """Atomically record a spent payment nonce/txHash. True if newly claimed,
+        False if already seen (a replay). Survives restarts — unlike an in-process set."""
+        return await asyncio.to_thread(self._claim_nonce, key)
+
+    def _claim_nonce(self, key: str) -> bool:
+        with self._lock:
+            try:
+                self._conn.execute("INSERT INTO spent_payments(key,ts) VALUES(?,?)", (key, int(time.time())))
+                self._conn.commit()
+                return True
+            except sqlite3.IntegrityError:
+                return False
 
     async def close(self) -> None:
         with self._lock:

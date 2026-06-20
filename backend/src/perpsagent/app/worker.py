@@ -19,11 +19,13 @@ X-User-Id is trusted input: terminate auth at the gateway/ingress.
 """
 from __future__ import annotations
 
+import hmac
 import uuid
 from decimal import Decimal
 
 from aiohttp import web
 
+from ..domain.grid import quantize_qty
 from ..domain.models import GridConfig, OrderPlacementError, Spacing, Venue
 from . import prefs
 from .service import AppService
@@ -68,8 +70,22 @@ _NO_CREDS = "no venue credentials — connect your API keys first"
 _FAUCET_URL = "https://faucet.sepolia.mantle.xyz"  # Mantle Sepolia testnet MNT faucet
 
 
-def build_worker_app(service: AppService, node: str, creds=None, wallet=None) -> web.Application:
-    app = web.Application()
+def build_worker_app(service: AppService, node: str, creds=None, wallet=None,
+                     internal_token: str = "") -> web.Application:
+    middlewares = []
+    if internal_token:
+        @web.middleware
+        async def _require_token(request: web.Request, handler):
+            # Defense-in-depth for the X-User-Id trust model: when the worker is
+            # reachable beyond loopback it must also require a shared secret from the
+            # bot/gateway, so a forged X-User-Id alone can't act as a user. /healthz
+            # stays open for liveness probes; constant-time compare avoids a timing leak.
+            if request.path != "/healthz" and not hmac.compare_digest(
+                    request.headers.get("X-Internal-Token", ""), internal_token):
+                raise web.HTTPUnauthorized(reason="missing or bad X-Internal-Token")
+            return await handler(request)
+        middlewares.append(_require_token)
+    app = web.Application(middlewares=middlewares)
 
     async def healthz(_request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "node": node})
@@ -89,6 +105,7 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
         try:
             bal = await service.balance(user_id)
             m = await service.market_info(user_id, market)
+            meta = await service.market_meta(user_id, market)
         except KeyError:
             raise web.HTTPUnauthorized(reason=_NO_CREDS) from None
         except PermissionError as e:
@@ -104,6 +121,19 @@ def build_worker_app(service: AppService, node: str, creds=None, wallet=None) ->
         size = prefs.grid_size(template, margin_q, m.mid)
         if size <= 0:
             raise web.HTTPBadRequest(reason="margin/balance too low to size this grid")
+        # The venue's minimum order qty can bump the per-level size UP (quantize_qty);
+        # when it does, the grid's REAL margin can exceed the balance and every order is
+        # rejected — a RUNNING grid with zero orders. Catch it HERE (before the on-chain
+        # commit) against the venue-aligned size, with a message the bot shows verbatim.
+        aligned = quantize_qty(size, meta.step_size, meta.min_order_size)
+        lev = Decimal(tpl["leverage"]) or Decimal(1)
+        need = aligned * int(tpl["levels"]) * Decimal(m.mid) / lev
+        if need > free:
+            raise web.HTTPBadRequest(text=(
+                f"{market}: minimum order is {meta.min_order_size}, so the smallest grid needs "
+                f"~{need.quantize(Decimal('0.01'))} {bal.currency} margin "
+                f"({aligned} x {tpl['levels']} levels @ {lev}x) but only "
+                f"{free.quantize(Decimal('0.01'))} is free. Add funds or pick a lower-priced market."))
         mid = Decimal(m.mid)
         band = Decimal(tpl["band"]) / 100
         return {
@@ -507,7 +537,8 @@ def main() -> None:
     async def _cleanup(_app):
         await service.drain()  # let fire-then-confirm attest/memory writes land
 
-    app = build_worker_app(service, s.shard_node, creds=creds_admin, wallet=wallet_admin)
+    app = build_worker_app(service, s.shard_node, creds=creds_admin, wallet=wallet_admin,
+                           internal_token=s.internal_token)
     app.on_startup.append(_startup)
     app.on_cleanup.append(_cleanup)
     print(f"[worker {s.shard_node}/{s.shard_count}] serving on {s.worker_host}:{s.worker_port}")

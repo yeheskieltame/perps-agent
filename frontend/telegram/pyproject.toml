@@ -4,10 +4,11 @@ version = "0.0.1"
 description = "Perps Agent Telegram bot — product UI over the worker/gateway HTTP API (never imports the engine or any SDK)."
 requires-python = ">=3.11"
 dependencies = [
-    "aiogram>=3.7",
-    "aiohttp>=3.9",
-    "pydantic-settings>=2",
-    "Pillow>=10",          # render the PnL share-card image on position close
+    # Capped below the next major for reproducible installs (bounds include tested versions).
+    "aiogram>=3.7,<4",
+    "aiohttp>=3.9,<4",
+    "pydantic-settings>=2,<3",
+    "Pillow>=10,<13",      # render the PnL share-card image on position close
 ]
 
 [project.optional-dependencies]

@@ -14,6 +14,13 @@ class OrderPlacementError(RuntimeError):
     RUNNING grid with no resting orders."""
 
 
+class StreamAuthError(RuntimeError):
+    """The venue's private fill stream rejected authentication (bad key / missing
+    derivatives permission / IP restriction). A permanent failure that never
+    self-heals — raised instead of reconnecting forever into a silent, fill-less
+    stream that would leave the engine blind to inventory and PnL."""
+
+
 class Venue(str, Enum):
     BYBIT = "bybit"
     MANTLE_DEX = "mantle_dex"  # iZiSwap (default) — see docs.perpsagent.xyz

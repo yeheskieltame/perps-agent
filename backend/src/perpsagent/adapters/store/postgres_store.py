@@ -57,6 +57,9 @@ CREATE INDEX IF NOT EXISTS idx_episodes_user ON episodes(user_id);
 CREATE TABLE IF NOT EXISTS grid_names (
     instance_id TEXT PRIMARY KEY, user_id BIGINT, name TEXT, updated_at BIGINT
 );
+CREATE TABLE IF NOT EXISTS spent_payments (
+    key TEXT PRIMARY KEY, ts BIGINT
+);
 """
 
 
@@ -226,6 +229,18 @@ class PostgresStore:
     async def delete_settings(self, user_id: int) -> None:
         pool = await self._ensure()
         await pool.execute("DELETE FROM user_settings WHERE user_id=$1", user_id)
+
+    # ---- x402 spent-payment replay guard ----
+
+    async def claim_nonce(self, key: str) -> bool:
+        """Atomically record a spent payment nonce/txHash. True if newly claimed,
+        False if already seen (a replay) — shared across every worker via the DB."""
+        pool = await self._ensure()
+        row = await pool.fetchval(
+            "INSERT INTO spent_payments(key,ts) VALUES($1,$2) ON CONFLICT(key) DO NOTHING RETURNING key",
+            key, int(time.time()),
+        )
+        return row is not None
 
     async def close(self) -> None:
         if self._pool is not None:

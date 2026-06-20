@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from html import escape
 
 from aiogram import BaseMiddleware, Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -640,7 +641,7 @@ async def _drop(message: Message) -> None:
 async def _go_strategy(bot: Bot, state: FSMContext, market: str) -> None:
     await _set(state, "market", market)
     await state.set_state(GridWizard.strategy)
-    await _send_step(bot, state, f"Coin: <b>{market}</b> ✓\n\n{commands.WIZ_STRATEGY}",
+    await _send_step(bot, state, f"Coin: <b>{escape(market)}</b> ✓\n\n{commands.WIZ_STRATEGY}",
                      wiz_strategy_kb())
 
 
@@ -761,7 +762,7 @@ async def wiz_back_to_strategy(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.answer()
     market = (await _cfg(state)).get("market", "")
     await state.set_state(GridWizard.strategy)
-    await _edit(cb, f"Coin: <b>{market}</b> ✓\n\n{commands.WIZ_STRATEGY}", wiz_strategy_kb())
+    await _edit(cb, f"Coin: <b>{escape(market)}</b> ✓\n\n{commands.WIZ_STRATEGY}", wiz_strategy_kb())
 
 
 @router.callback_query(GridWizard.build, WizCB.filter(F.field == "defaults"))
@@ -796,7 +797,7 @@ async def wiz_confirm(cb: CallbackQuery, api: WorkerAPI, state: FSMContext, bot:
 # ── runner ───────────────────────────────────────────────────────────────────
 
 async def _run(settings: BotSettings) -> None:
-    api = WorkerAPI(settings.api_url)
+    api = WorkerAPI(settings.api_url, settings.worker_token)
     bot = Bot(settings.token, default=DefaultBotProperties(parse_mode="HTML"))
     dp = Dispatcher(api=api, settings=settings, storage=MemoryStorage())
     allow = Allowlist(settings.allowed_ids())
